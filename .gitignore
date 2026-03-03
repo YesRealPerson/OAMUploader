@@ -1,0 +1,11 @@
+# Python venv
+venv/*
+Scripts/*
+Lib/*
+Include/*
+pyvenv.cfg
+__pycache__/*
+
+# Project resources
+temporary/*
+!temporary/.stub
