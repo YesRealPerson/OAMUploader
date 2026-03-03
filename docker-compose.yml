@@ -1,20 +1,23 @@
 version: "1.0"
+name: "oam-uploader"
 services:
   public:
     build:
       context: . 
-      dockerfile: ./public/Dockerfile
+      dockerfile: ./public/Dockerfile.dev
+    image: oam-uploader-public:latest
     volumes:
       - ./public:/app
-      - ./temporary:/temp
+      - ./temporary:/temporary
     ports:
       - "8080:8080"
   private:
     build:
       context: .
-      dockerfile: ./private/Dockerfile
+      dockerfile: ./private/Dockerfile.dev
+    image: oam-uploader-private:latest
     volumes:
       - ./private:/app
-      - ./temporary:/temp
+      - ./temporary:/temporary
     ports:
       - "7070:7070"

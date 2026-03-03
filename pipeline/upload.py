@@ -1,1 +1,4 @@
-# Upload to S3
+"""
+Grab all metadata and upload to pgSTAC
+Upload COG to S3
+"""

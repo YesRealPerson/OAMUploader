@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: private-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: private
+  template:
+    metadata:
+      labels:
+        app: private
+    spec:
+      containers:
+        - name: private
+          image: oam-uploader-private:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 7070
+          volumeMounts:
+            - name: temporary-files
+              mountPath: /mnt/temporary
+      volumes:
+        - name: temporary-files
+          persistentVolumeClaim:
+            claimName: temp-pvc

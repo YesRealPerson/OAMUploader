@@ -6,7 +6,7 @@ app = FastAPI(
     title="OAM Uploader Public API"
 )
 
-# Methods
+# Example Methods
 @app.get("/api/v1/test")
 async def TestMethod():
     """
@@ -19,7 +19,16 @@ async def TestMethod():
     """
     Reads a shared file from the /temp directory!
     """
-    return FileResponse("/temp/testfile.txt")
+    return FileResponse("/temporary/testfile.txt")
+
+@app.get("/api/v1/writeShared")
+async def TestMethod():
+    """
+    Appends an 'a' to the shared file
+    """
+    with open("/temporary/testfile.txt", "a", encoding="utf-8") as f:
+        f.write("a")
+    return FileResponse("/temporary/testfile.txt")
 
 
 

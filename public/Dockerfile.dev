@@ -5,13 +5,9 @@ WORKDIR /app
 # Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY private/internalServer.py ./
-
-RUN mkdir -p /mnt/temporary
-RUN ln -s /mnt/temporary /temporary
 
 # Expose port, should change later
-EXPOSE 7070
+EXPOSE 8080
 
 # Start server
-CMD ["uvicorn", "internalServer:app", "--port", "7070", "--host=0.0.0.0"]
+CMD ["uvicorn", "publicServer:app", "--port", "8080", "--host=0.0.0.0", "--reload"]
