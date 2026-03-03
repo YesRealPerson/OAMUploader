@@ -1,0 +1,20 @@
+version: "1.0"
+services:
+  public:
+    build:
+      context: . 
+      dockerfile: ./public/Dockerfile
+    volumes:
+      - ./public:/app
+      - ./temporary:/temp
+    ports:
+      - "8080:8080"
+  private:
+    build:
+      context: .
+      dockerfile: ./private/Dockerfile
+    volumes:
+      - ./private:/app
+      - ./temporary:/temp
+    ports:
+      - "7070:7070"

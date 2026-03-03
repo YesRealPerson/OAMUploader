@@ -1,11 +1,11 @@
 # Python venv
-venv/*
-Scripts/*
-Lib/*
-Include/*
+venv
+Scripts
+Lib
+Include
 pyvenv.cfg
-__pycache__/*
+__pycache__
 
 # Project resources
-temporary/*
+temporary
 !temporary/.stub
