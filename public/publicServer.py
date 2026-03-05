@@ -32,6 +32,18 @@ async def TestMethod():
 
 
 
+@app.delete("/api/v1/uploads/{id}")
+async def cancel_upload(id: str):
+    # TODO: Verify user owns this upload via OAuth token
+    # TODO: Abort S3 multipart upload
+    # TODO: Update database status to canceled
+    
+    return {
+        "status": "success",
+        "message": f"Upload {id} has been successfully aborted.",
+        "dummy_data": True
+    }
+
 # Serve HTML, keep at bottom
 STATIC = Path(__file__).parent / "static"
 @app.get("{full_path:path}")
