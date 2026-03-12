@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>OAM Uploader</title>
+    <link href="./styles.css" rel="stylesheet">
+    <link href="https://releases.transloadit.com/uppy/v5.2.1/uppy.min.css" rel="stylesheet">
+    <style>
+        #uppy-container {
+            max-width: 800px;
+            margin: 20px auto;
+        }
+    </style>
+</head>
+<script src="./scripting.js" defer></script>
+<header>
+    <a href="/">Home</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/upload">Upload</a>
+    <a href="/docs">Docs</a>
+</header>
+<body>
+    <h1>Upload</h1>
+    <div id="uppy-container">
+        <div id="uppy"></div>
+    </div>
+
+    <script type="module">
+        import { Uppy, Dashboard, AwsS3 } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
+
+        const uppy = new Uppy({
+            restrictions: {
+                allowedFileTypes: ['.tif', '.tiff'],
+            },
+        });
+
+        uppy.use(Dashboard, {
+            target: '#uppy',
+            inline: true,
+            proudlyDisplayPoweredByUppy: false,
+            width: '100%',
+            height: 450,
+        });
+
+        uppy.use(AwsS3, {
+            shouldUseMultipart: (file) => file.size > 5 * 1024 * 1024,
+
+            async getUploadParameters(file, options) {
+                const res = await fetch('/api/v1/upload/sign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        contentType: file.type,
+                    }),
+                    signal: options.signal,
+                });
+                if (!res.ok) throw new Error('Failed to get upload parameters');
+                return await res.json();
+            },
+
+            async createMultipartUpload(file) {
+                const res = await fetch('/api/v1/upload/create-multipart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        contentType: file.type,
+                    }),
+                });
+                if (!res.ok) throw new Error('Failed to create multipart upload');
+                return await res.json();
+            },
+
+            async signPart(file, { uploadId, key, partNumber, signal }) {
+                const res = await fetch('/api/v1/upload/sign-part', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uploadId, key, partNumber }),
+                    signal,
+                });
+                if (!res.ok) throw new Error('Failed to sign part');
+                return await res.json(); // { url }
+            },
+
+            async listParts(file, { uploadId, key, signal }) {
+                const res = await fetch('/api/v1/upload/list-parts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uploadId, key }),
+                    signal,
+                });
+                if (!res.ok) throw new Error('Failed to list parts');
+                return await res.json(); // [{ PartNumber, Size, ETag }]
+            },
+
+            async completeMultipartUpload(file, { uploadId, key, parts }) {
+                const res = await fetch('/api/v1/upload/complete-multipart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uploadId, key, parts }),
+                });
+                if (!res.ok) throw new Error('Failed to complete multipart upload');
+                return await res.json();
+            },
+
+            async abortMultipartUpload(file, { uploadId, key }) {
+                await fetch('/api/v1/upload/abort-multipart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uploadId, key }),
+                });
+            },
+        });
+
+        uppy.on('complete', (result) => {
+            console.log('Upload complete. Successful files:', result.successful);
+            console.log('Failed files:', result.failed);
+        });
+
+        uppy.on('error', (error) => {
+            console.error('Upload error:', error);
+        });
+    </script>
+</body>
+</html>
