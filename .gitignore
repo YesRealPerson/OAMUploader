@@ -9,3 +9,5 @@ __pycache__
 # Project resources
 temporary
 !temporary/.stub
+
+.env
