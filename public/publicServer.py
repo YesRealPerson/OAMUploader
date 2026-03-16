@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 import botocore.exceptions
 from pathlib import Path
 from pydantic import BaseModel, ConfigDict
@@ -7,6 +7,9 @@ import boto3
 from dotenv import load_dotenv
 import os
 from typing import Dict, List
+import httpx
+
+s3_client = boto3.client("s3")
 
 if(not os.getenv("PRODUCTION")):
     load_dotenv()
@@ -62,6 +65,32 @@ TODO: Remove raw responses later, currently only for debugging purposes
 TODO: Remove list multipart uploads
 TODO: Specify response schemas when everything is finalized
 """
+CLIENT_ID = os.getenv("OAUTH_CLIENT")
+CLIENT_SECRET = os.getenv("OAUTH_SECRET")
+REDIRECT_URI = os.getenv("REDIRECT_URI")
+AUTHORIZE_URL_OSM = "https://www.openstreetmap.org/oauth2/authorize"
+TOKEN_URL_OSM = "https://www.openstreetmap.org/oauth2/token"
+
+# Example Methods
+@app.get("/api/v1/login")
+async def osmlogin():
+    url = f"{AUTHORIZE_URL_OSM}?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&scope=openid"
+    return RedirectResponse(url)
+
+@app.get("/api/v1/authenticate")
+async def authenticate(code: str):
+    async with httpx.AsyncClient() as client:
+        payload = {"grant_type": "authorization_code",
+            "code": code,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "redirect_uri": REDIRECT_URI}
+        response = await client.post(TOKEN_URL_OSM, data=payload)
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=400)
+    token_data=response.json()
+    return token_data
 
 # Dashboard Endpoints
 class GetEntriesBody(BaseModel):
@@ -227,6 +256,17 @@ async def listparts(body: listpartsBody):
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
     except KeyError as err: # The parts key will not exist if no parts have been uploaded
         raise HTTPException(status_code=400, detail="No parts uploaded!")
+
+@app.delete("/api/v1/uploads/{id}")
+async def cancel_upload(id: str):
+    # TODO: Verify user owns this upload via OAuth token
+    # TODO: Abort S3 multipart upload
+    # TODO: Update database status to canceled
+    
+    return {
+        "status": "success",
+        "message": f"Upload {id} has been successfully aborted."
+    }
 
 # Serve HTML, keep at bottom
 STATIC = Path(__file__).parent / "static"

@@ -14,6 +14,7 @@ package-lock.json
 temporary
 !temporary/.stub
 
+<<<<<<< HEAD
 # OS files
 .DS_Store
 Thumbs.db
@@ -25,3 +26,6 @@ Thumbs.db
 # Environment
 .env
 .env.*
+=======
+.env
+>>>>>>> 8cd5b80a3e53fc97326a0f90afa9bd130dd77a22
