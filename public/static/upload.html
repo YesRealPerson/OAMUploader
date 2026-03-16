@@ -5,12 +5,6 @@
     <title>OAM Uploader</title>
     <link href="./styles.css" rel="stylesheet">
     <link href="https://releases.transloadit.com/uppy/v5.2.1/uppy.min.css" rel="stylesheet">
-    <style>
-        #uppy-container {
-            max-width: 800px;
-            margin: 20px auto;
-        }
-    </style>
 </head>
 <script src="./scripting.js" defer></script>
 <header>
@@ -22,6 +16,47 @@
 <body>
     <h1>Upload</h1>
     <div id="uppy-container">
+        <form id="metadata">
+            <h3>Additional information</h3>
+            <label for="title">Title*</label>
+            <input type="text" name="title" placeholder="Upload name" required/>
+            
+            <label for="platform">Platform*</label>
+            <select name="platform" required>
+                <option value="satellite">Satellite</option>
+                <option value="aircraft">Aircraft</option>
+                <option value="uav">UAV</option>
+                <option value="balloon">Balloon</option>
+                <option value="Kite">Kite</option>
+            </select>
+            
+            <label for="sensor">Sensor</label>
+            <input type="text" name="sensor" placeholder="Camera or sensor model"/>
+            
+            <label for="acqdatestart">Acquisition Date (start)*</label>
+            <input type="date" name="acqdatestart" required/>
+            
+            <label for="acqdateend">Acquisition Date (end)</label>
+            <input type="date" name="acqdateend"/>
+            
+            <label for="provider">Provider*</label>
+            <input type="text" name="provider" placeholder="Your name or organization" required/>
+            
+            <!-- TODO: Default to user login email -->
+            <label for="contact">Contact*</label>
+            <input type="email" name="contact" placeholder="Your email" required/>
+            
+            <label for="license">License*</label>
+            <select name="license" required>
+                <option value="0">CC-BY 4.0</option>
+                <option value="1">CC BY-NC 4.0</option>
+                <option value="2">CC BY-SA 4.0</option>
+            </select>
+            
+            <label for="tags">Tags</label>
+            <input type="text" name="tags" placeholder="Comma separated tags"/>
+            *Required
+        </form>
         <div id="uppy"></div>
     </div>
 
@@ -43,40 +78,36 @@
         });
 
         uppy.use(AwsS3, {
-            shouldUseMultipart: (file) => file.size > 5 * 1024 * 1024,
-
-            async getUploadParameters(file, options) {
-                const res = await fetch('/api/v1/upload/sign', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        filename: file.name,
-                        contentType: file.type,
-                    }),
-                    signal: options.signal,
-                });
-                if (!res.ok) throw new Error('Failed to get upload parameters');
-                return await res.json();
-            },
+            shouldUseMultipart: true,
+            limit: 1, // May change later, but for now I would imagine only 1
+            // TODO: Implement companion for Google Drive and DropBox upload, requires changes to publicServer as well...
+            // TODO: Send userid using headers tag
 
             async createMultipartUpload(file) {
-                const res = await fetch('/api/v1/upload/create-multipart', {
+                const res = await fetch('/api/v1/s3/createmultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         filename: file.name,
-                        contentType: file.type,
+                        contenttype: file.type,
+                        metadata: {
+                            "key": "value" //TODO: Link to form
+                        }
                     }),
                 });
                 if (!res.ok) throw new Error('Failed to create multipart upload');
                 return await res.json();
             },
 
-            async signPart(file, { uploadId, key, partNumber, signal }) {
-                const res = await fetch('/api/v1/upload/sign-part', {
+            async signPart(file, { uploadId, key, partNumber, signal }) { // Creates signed URL to upload files to
+                const res = await fetch('/api/v1/s3/signedurl', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uploadId, key, partNumber }),
+                    body: JSON.stringify({ 
+                        'uploadid': uploadId, 
+                        'key': key, 
+                        'partnumber': partNumber 
+                    }),
                     signal,
                 });
                 if (!res.ok) throw new Error('Failed to sign part');
@@ -84,10 +115,13 @@
             },
 
             async listParts(file, { uploadId, key, signal }) {
-                const res = await fetch('/api/v1/upload/list-parts', {
+                const res = await fetch('/api/v1/s3/listparts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uploadId, key }),
+                    body: JSON.stringify({ 
+                        'uploadid': uploadId, 
+                        'key': key 
+                    }),
                     signal,
                 });
                 if (!res.ok) throw new Error('Failed to list parts');
@@ -95,20 +129,27 @@
             },
 
             async completeMultipartUpload(file, { uploadId, key, parts }) {
-                const res = await fetch('/api/v1/upload/complete-multipart', {
+                const res = await fetch('/api/v1/s3/completemultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uploadId, key, parts }),
+                    body: JSON.stringify({ 
+                        'uploadid': uploadId, 
+                        'key': key, 
+                        'parts': parts 
+                    }),
                 });
                 if (!res.ok) throw new Error('Failed to complete multipart upload');
                 return await res.json();
             },
 
             async abortMultipartUpload(file, { uploadId, key }) {
-                await fetch('/api/v1/upload/abort-multipart', {
+                await fetch('/api/v1/s3/abortmultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uploadId, key }),
+                    body: JSON.stringify({ 
+                        'uploadid': uploadId, 
+                        'key': key 
+                    }),
                 });
             },
         });

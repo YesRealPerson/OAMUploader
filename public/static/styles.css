@@ -1,0 +1,19 @@
+#metadata > * {
+    display: block;
+}
+#metadata > input, select{
+    margin-bottom: .5rem;
+    margin-left: .25rem;
+}
+#metadata > h3 {
+    margin: .25rem;
+}
+#uppy-container {
+    display: grid;
+    grid-template-columns: 20% 10% 70%;
+    max-width: 90%;
+    margin: auto;
+}
+#uppy{
+    grid-column: 3;
+}

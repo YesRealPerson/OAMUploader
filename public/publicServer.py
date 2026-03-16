@@ -6,7 +6,7 @@ from pydantic import BaseModel
 import boto3
 from dotenv import load_dotenv
 import os
-from typing import Dict
+from typing import Dict, List
 
 load_dotenv()
 
@@ -40,6 +40,7 @@ TODO: DELETE ME LATER :)
 TODO: Combine repeated body types when all finalized.
 """
 
+# Dashboard Endpoints
 class GetEntriesBody(BaseModel):
     count: int
     user: str
@@ -86,42 +87,45 @@ async def DeleteEntry(body: DeleteEntryBody):
         "message": "Dummy response"
     }
 
+# S3 Endpoints
 """
-S3 endpoints
 TODO: Add checking for the current user
 the current user should not have more than 1 (?) upload at a time to prevent abuse, push id to list on create, pop on abort or complete
 TODO: Remove raw responses later, currently only for debugging purposes
 TODO: Remove list multipart uploads
 TODO: Add field validation for createmultipart
+TODO: Specify response schemas
 """
 @app.get("/api/v1/s3/listmultiparts", tags=["AWS S3"])
 async def listmultipart():
     """
     Temporary endpoint to list s3 multipart uploads
     """
-    response = s3.list_multipart_uploads(Bucket=os.getenv("BUCKET_NAME"))
-    if("Uploads" not in response.keys()):
-        return []
-    return response["Uploads"]
+    try:
+        return s3.list_multipart_uploads(Bucket=os.getenv("BUCKET_NAME"))["Uploads"]
+    except KeyError:
+        raise HTTPException(status_code=400, detail="No uploads have been started!")
 class createmultipartBody(BaseModel):
     filename: str
     metadata: Dict[str, str]
+    contenttype: str
 @app.post("/api/v1/s3/createmultipart", tags=["AWS S3"])
 async def createmultipart(body: createmultipartBody):
     """
     Creates a multipart upload
     """
-    userid = "c21782c1-873a-4b79-a3cf-c6a9d25c2e6a" # TEMP, REPLACE ME LATER
+    userid = "c21782c1-873a-4b79-a3cf-c6a9d25c2e6a" # TODO: Replace me with actual UUID
     key = userid+"-"+body.filename
     response = s3.create_multipart_upload(
         Bucket=os.getenv("BUCKET_NAME"),
         Metadata=body.metadata,
-        Key=key
+        Key=key,
+        ContentType=body.contenttype
     )
     return {
         'key': key,
-        'id': response["UploadId"],
-        'raw': response
+        'uploadId': response["UploadId"],
+        'raw': response # For debugging purposes
     }
 
 class abortmultipartBody(BaseModel):
@@ -139,14 +143,28 @@ async def abortmultipart(body: abortmultipartBody):
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
     return 200
 
+class partSchema(BaseModel):
+    ETag: str
+    ChecksumCRC32: str
+    ChecksumCRC32C: str
+    ChecksumCRC64NVME: str
+    ChecksumSHA1: str
+    ChecksumSHA256: str
+    PartNumber: int
 class completemultipartBody(BaseModel):
     key: str
+    uploadid: str
+    parts: List[partSchema]
 @app.post("/api/v1/s3/completemultipart", tags=["AWS S3"])
 async def completemultipart(body: completemultipartBody):
     try:
         s3.complete_multipart_upload(
             Bucket=os.getenv("BUCKET_NAME"),
-            Key=body.key
+            UploadId=body.uploadid,
+            Key=body.key,
+            MulitpartUpload={
+                'Parts': body.parts
+            }
         )
     except botocore.exceptions.ClientError as err:
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
@@ -175,6 +193,21 @@ async def signedurl(body: signedurlBody):
     except botocore.exceptions.ClientError as err:
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
 
+class listpartsBody(BaseModel):
+    key: str
+    uploadid: str
+@app.post("/api/v1/s3/listparts", tags=["AWS S3"])
+async def listparts(body: listpartsBody):
+    """
+    Returns the parts of a multipartupload that have already been uploaded
+    """
+    try:
+        return s3.list_parts(Bucket=os.getenv("BUCKET_NAME"), Key=body.key, UploadId=body.uploadid)["Parts"]
+    except botocore.exceptions.ClientError as err:
+        raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
+    except KeyError as err: # The parts key will not exist if no parts have been uploaded
+        raise HTTPException(status_code=400, detail="No parts uploaded!")
+
 # Serve HTML, keep at bottom
 STATIC = Path(__file__).parent / "static"
 @app.get("{full_path:path}")
@@ -184,6 +217,8 @@ async def ServeHTML(full_path: str):
     """
     if full_path == "/" or full_path == "":
         full_path = "index.html"
+    elif ".css" in full_path or ".js" in full_path:
+        full_path = "."+full_path
     else:
         full_path = "."+full_path+".html"
     file = STATIC / full_path
