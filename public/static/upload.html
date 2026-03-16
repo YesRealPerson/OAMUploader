@@ -5,6 +5,9 @@
     <title>OAM Uploader</title>
     <link href="./styles.css" rel="stylesheet">
     <link href="https://releases.transloadit.com/uppy/v5.2.1/uppy.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@100..900&display=swap" rel="stylesheet">
 </head>
 <script src="./scripting.js" defer></script>
 <header>
@@ -17,30 +20,48 @@
     <h1>Upload</h1>
     <div id="uppy-container">
         <form id="metadata">
-            <h3>Additional information</h3>
+            <h3>Upload Imagery</h3>
+            <hr>
             <label for="title">Title*</label>
-            <input type="text" name="title" placeholder="Upload name" required/>
+            <input type="text" name="title" placeholder="Dataset title" required/>
             
             <label for="platform">Platform*</label>
-            <select name="platform" required>
-                <option value="satellite">Satellite</option>
-                <option value="aircraft">Aircraft</option>
-                <option value="uav">UAV</option>
-                <option value="balloon">Balloon</option>
-                <option value="Kite">Kite</option>
-            </select>
-            
+            <div>
+                <input id="satellite" type="radio" name="platform" value="satellite">
+                <label for="satellite">Satellite</label>
+                <input id="aircraft" type="radio" name="platform" value="aircraft">
+                <label for="aircraft">Aircraft</label>
+                <input id="uav" type="radio" name="platform" value="uav">
+                <label for="uav">UAV</label>
+                <input id="balloon" type="radio" name="platform" value="balloon">
+                <label for="balloon">Balloon</label>
+                <input id="kite" type="radio" name="platform" value="kite">
+                <label for="kite">Kite</label>
+            </div>
+
             <label for="sensor">Sensor</label>
-            <input type="text" name="sensor" placeholder="Camera or sensor model"/>
+            <input type="text" name="sensor" placeholder="Type/model"/>
+            <div class="subtitle">
+                Type or model of image sensor or camera used (ex: Worldview-3).
+            </div>
             
             <label for="acqdatestart">Acquisition Date (start)*</label>
-            <input type="date" name="acqdatestart" required/>
+            <input type="datetime-local" name="acqdatestart" required/>
+            <div class="subtitle">
+                If the exact start time is unknown using 00:00:00 will suffice.
+            </div>
             
             <label for="acqdateend">Acquisition Date (end)</label>
-            <input type="date" name="acqdateend"/>
+            <input type="datetime-local" name="acqdateend"/>
+            <div class="subtitle">
+                If the exact end time is unknown using 23:59:59 will suffice.
+            </div>
             
             <label for="provider">Provider*</label>
             <input type="text" name="provider" placeholder="Your name or organization" required/>
+            <div class="subtitle">
+                Name of company or individual that collected or provided the imagery.
+            </div>
             
             <!-- TODO: Default to user login email -->
             <label for="contact">Contact*</label>
@@ -55,17 +76,27 @@
             
             <label for="tags">Tags</label>
             <input type="text" name="tags" placeholder="Comma separated tags"/>
-            *Required
+            <div class="subtitle">
+                Any additional metadata tags applicable to the dataset.
+            </div>
         </form>
+        <div>
+            Only georeferenced TIFF files in natural colors or monochrome ones (4 bands or less, 8 bits) are accepted.
+        </div>
         <div id="uppy"></div>
+        <div style="margin-top: 1rem;">*Required</div>
+        
     </div>
 
     <script type="module">
-        import { Uppy, Dashboard, AwsS3 } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
+        // TODO: Allow multiple uploads at once, requires different forms per file!
+        import { Uppy, Dashboard, AwsS3, Form } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
 
         const uppy = new Uppy({
+            autoProceed: false, // So uppy only uploads when the metadata is finalized, "By default, Uppy used to begin uploading right after you selected a file."
             restrictions: {
                 allowedFileTypes: ['.tif', '.tiff'],
+                maxNumberOfFiles: 1 // TODO: See above.
             },
         });
 
@@ -77,6 +108,42 @@
             height: 450,
         });
 
+        uppy.use(Form, {
+            target: '#metadata',
+            getMetaFromForm: true,
+            addResultToForm: false
+        })
+
+        class MetadataError extends Error { // Shamelessly stolen from the internet lmao
+            constructor(message){
+                super(message)
+                this.name = "ValidationError"
+            }
+        }
+
+        const validateMetadata = (metadata) => {
+            let required = {
+                "title": "Title",
+                "platform": "Platform",
+                "acqdatestart": "Acquisition Date",
+                "provider": "Provider",
+                "contact": "Contact",
+                "license": "License"
+            }
+            let others = ["sensor", "acqdateend", "tags"]
+            let final = {}
+            Object.keys(required).forEach((key) => {
+                if(!metadata[key]){
+                    throw new MetadataError(`Invalid metadata, missing field: ${required[key]}`)
+                }
+                final[key] = metadata[key]
+            })
+            others.forEach((key) => {
+                final[key] = metadata[key]
+            })
+            return final
+        }
+
         uppy.use(AwsS3, {
             shouldUseMultipart: true,
             limit: 1, // May change later, but for now I would imagine only 1
@@ -84,15 +151,16 @@
             // TODO: Send userid using headers tag
 
             async createMultipartUpload(file) {
+
+                let metadata = validateMetadata(file.meta)
+
                 const res = await fetch('/api/v1/s3/createmultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         filename: file.name,
                         contenttype: file.type,
-                        metadata: {
-                            "key": "value" //TODO: Link to form
-                        }
+                        metadata: metadata
                     }),
                 });
                 if (!res.ok) throw new Error('Failed to create multipart upload');
@@ -158,6 +226,10 @@
             console.log('Upload complete. Successful files:', result.successful);
             console.log('Failed files:', result.failed);
         });
+
+        uppy.on('upload-error', (file, error) => {
+            uppy.info(error, 'error', 5000)
+        })
 
         uppy.on('error', (error) => {
             console.error('Upload error:', error);
