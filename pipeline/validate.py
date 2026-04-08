@@ -1,4 +1,5 @@
 """
+(2)
 Validate GeoTIFF
  - From shared directory, read GeoTIFF and validate, if invalid delete
 """
@@ -27,3 +28,5 @@ def validate_geotiff(path):
         return delete(path)
     src.close()
     return True
+
+print(validate_geotiff("C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1\\tester1.tif"))

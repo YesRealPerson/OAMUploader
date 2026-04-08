@@ -10,11 +10,28 @@
 <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@100..900&display=swap" rel="stylesheet">
 </head>
 <script src="./scripting.js" defer></script>
-<header>
+<script defer>
+	const main = async () => {
+		let response = await (await fetch("/api/v1/getuser")).json()
+		console.log(response)
+		if(response.status == 0){
+			document.getElementById("status").innerText = "Not logged in!"
+		}else{
+			document.getElementById("status").innerText = `Hello, ${response.user}!`
+		}
+	}
+	main()
+</script>
+<header style="display: flex; justify-content: space-between;">
+	<div>
     <a href="/">Home</a>
     <a href="/dashboard">Dashboard</a>
     <a href="/upload">Upload</a>
     <a href="/docs">Docs</a>
+	</div>
+	<div>
+		<span id="status">Loading</span>
+	</div>
 </header>
 <body>
     <h1>Upload</h1>

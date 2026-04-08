@@ -45,3 +45,5 @@ def extract_metadata(path, out_dir):
         pass
     src.close()
     return metadata
+
+print(extract_metadata("C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1\\tester1.tif", "C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1"))

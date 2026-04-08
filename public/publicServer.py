@@ -1,15 +1,17 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+import secrets
+
+from fastapi import FastAPI, HTTPException, Depends, Cookie
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 import botocore.exceptions
 from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 import boto3
+import httpx
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
 from typing import Dict, List
-import httpx
-
-s3_client = boto3.client("s3")
+from jose import ExpiredSignatureError, JWTError, jwt
 
 if(not os.getenv("PRODUCTION")):
     load_dotenv()
@@ -56,59 +58,204 @@ app = FastAPI(
 """
 )
 
+CLIENT_ID = os.environ.get("OAUTH_CLIENT", "test")
+CLIENT_SECRET = os.environ.get("OAUTH_SECRET", "test")
+REDIRECT_URI = os.environ.get("REDIRECT_URI", "test")
+AUTHORIZE_URL = "https://www.openstreetmap.org/oauth2/authorize"
+TOKEN_URL = "https://www.openstreetmap.org/oauth2/token"
+
+JWT_SECRET = os.environ.get("JWT_SECRET")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_HOURS = 1
+REFRESH_TOKEN_DAYS = 30
+
 """
 Notes section:
 TODO: DELETE ME LATER :)
 TODO: Combine repeated body types when all finalized.
 TODO: Add checking for the current user, currently the API is very insecure and will just let users interact with S3, NOT GOOD.
-TODO: Remove raw responses later, currently only for debugging purposes
-TODO: Remove list multipart uploads
 TODO: Specify response schemas when everything is finalized
-TODO: Local pgSQL for dashboard endpoints
-TODO: Golden Retriever
-TODO: Lower bandwidth handling by reducing max simulataneous connections
-https://github.com/hotosm/drone-tm/blob/e8978bcbf42f81f372e2477a9c29ecf523fdec46/src/frontend/src/components/DroneOperatorTask/DescriptionSection/UppyFileUploader/index.tsx#L72
+TODO: Link to actual database for user storage
 """
-CLIENT_ID = os.getenv("OAUTH_CLIENT")
-CLIENT_SECRET = os.getenv("OAUTH_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI")
-AUTHORIZE_URL_OSM = "https://www.openstreetmap.org/oauth2/authorize"
-TOKEN_URL_OSM = "https://www.openstreetmap.org/oauth2/token"
 
-# OAuth
-@app.get("/api/v1/login", tags=["OAuth"])
+
+# Helpers
+class User(BaseModel):
+    username: str
+    user_id: str
+    expires_at: datetime
+    created_at: datetime
+userdb:dict[str, User] = {} # Poor mans database for user refresh tokens, TODO: Update to be pgsql or similar
+
+def create_session_token(user_id: str, username: str):
+    """
+    Creates a JWT session token
+    """
+    now = datetime.now(timezone.utc) 
+
+    payload = {
+        "sub": str(user_id),
+        "username": str(username),
+        "exp": int((now + timedelta(hours=JWT_EXPIRE_HOURS)).timestamp()),
+        "iat": int(now.timestamp()),
+        "iss": "OAMUploader",
+        "type": "access"
+    }
+
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token
+def create_refresh_token():
+    return secrets.token_urlsafe(64)
+def get_current_user(session: str = Cookie(None)):
+    if not session:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    try:
+        payload = jwt.decode(session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except JWTError as e:
+        print(e)
+        raise HTTPException(status_code=401, detail="Invalid session")
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Expired session")
+
+# tester
+@app.get("/api/v1/testget", tags=["testing"])
+async def testget(user=Depends(get_current_user)):
+    return "Hello "+user["username"]
+
+
+# Authentication endpoints
+@app.get("/api/v1/login", tags=["redirects"])
 async def osmlogin():
-    url = f"{AUTHORIZE_URL_OSM}?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&scope=openid"
-    return RedirectResponse(url)
+    state = secrets.token_urlsafe(32)
+    url = f"{AUTHORIZE_URL}?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state={state}&scope=openid read_prefs"
+    response = RedirectResponse(url)
+    response.set_cookie("oauth_state", state, httponly=True, samesite="lax")
+    return response
 
-@app.get("/api/v1/authenticate", tags=["OAuth"])
-async def authenticate(code: str):
+
+@app.post("/api/v1/refresh", tags=["authentication"])
+async def refreshsession(refresh: str = Cookie(None)):
+    if not refresh:
+        raise HTTPException(status_code=401)
+    try:
+        user:User = userdb[refresh]
+    except KeyError:
+        raise HTTPException(status_code=401)
+    now = datetime.now(timezone.utc)
+    if now > user.expires_at:
+        raise HTTPException(status_code=401)
+    
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key="session",
+        value=create_session_token(user.user_id, user.username),
+        httponly=True,
+        secure=os.getenv("AWS_ACCESS_KEY_ID") != "test",
+        samesite="lax",
+        max_age=60 * 60
+    )
+    new_refresh = create_refresh_token()
+    del userdb[refresh]   # invalidate old token
+    userdb[new_refresh] = user
+
+    response.set_cookie(
+        key="refresh",
+        value=new_refresh,
+        httponly=True,
+        secure=os.getenv("AWS_ACCESS_KEY_ID") != "test",
+        samesite="strict",
+        max_age=60 * 60 * 24 * 30
+    )
+
+    return response
+
+@app.get("/api/v1/authorize", tags=["authentication"])
+async def authenticate(code: str, state: str, oauth_state: str = Cookie(None)):
+    if state != oauth_state:
+        raise HTTPException(status_code=400, detail="OAuth state mismatch")
+    # Get tokens
     async with httpx.AsyncClient() as client:
         payload = {"grant_type": "authorization_code",
             "code": code,
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
             "redirect_uri": REDIRECT_URI}
-        response = await client.post(TOKEN_URL_OSM, data=payload)
+        response = await client.post(TOKEN_URL, data=payload)
+    if response.status_code != 200:
+        if(500 > response.status_code >= 400):
+            print("we potentially fucked up:",response.read())
+        raise HTTPException(status_code=response.status_code)
+    token_data=response.json()
+
+    # Get user info
+    async with httpx.AsyncClient() as client:
+        headers = {
+            "Authorization": "Bearer "+token_data["access_token"]
+        }
+        response = await client.get("https://api.openstreetmap.org/api/0.6/user/details.json", headers=headers)
 
     if response.status_code != 200:
-        raise HTTPException(status_code=400)
-    token_data=response.json()
-    return token_data
+        if(500 > response.status_code >= 400):
+            print("we potentially fucked up:",response.read())
+        raise HTTPException(status_code=response.status_code)
+    
+    # get user_data
+    user_data=response.json()["user"]
+    # Generate JWT and register to database
+    jwtToken = create_session_token(user_data["id"],user_data["display_name"])
+    response = RedirectResponse("/dashboard")
+
+    response.set_cookie(
+        key="session",
+        value=jwtToken,
+        httponly=True,
+        secure= os.getenv("AWS_ACCESS_KEY_ID") != "test", # IF we're testing, don't require https
+        samesite="lax",
+        max_age=60 * 60
+    )
+
+    refreshToken = create_refresh_token()
+    response.set_cookie(
+        key="refresh",
+        value=refreshToken,
+        httponly=True,
+        secure= os.getenv("AWS_ACCESS_KEY_ID") != "test", # IF we're testing, don't require https
+        samesite="strict",
+        max_age=60 * 60 * 24 * 30
+    )
+    now = datetime.now(timezone.utc)
+    userdb[refreshToken] = User(username=user_data["display_name"], user_id=(str)(user_data["id"]), expires_at=now + timedelta(hours=REFRESH_TOKEN_DAYS), created_at=now)
+
+    return response
+
+@app.get("/api/v1/getuser")
+async def GetUser(session: str = Cookie(None)):
+    try:
+        user = get_current_user(session)
+        return {
+            'status': 1,
+            'user': user["username"]
+        }
+    except:
+        return {
+            'status': 0,
+            'user': "None"
+        }
 
 # Dashboard Endpoints
 class GetEntriesBody(BaseModel):
     count: int
-    user: str
 @app.get("/api/v1/getEntries", tags=["Dashboard"])
-async def GetEntries(body: GetEntriesBody):
+async def GetEntries(body: GetEntriesBody, user=Depends(get_current_user)):
     """
     Gets the next 'count' entries of the user.
     TODO: NOT IMPLEMENTED
     """
     return {
         "count": body.count,
-        "user": body.user,
+        "user": user["username"],
         "message": "Dummy response"
     }
 
@@ -117,13 +264,13 @@ class EditEntryBody(BaseModel):
     user: str
     # TODO: Fillout with metadata form OIN specification
 @app.patch("/api/v1/editEntry", tags=["Dashboard"])
-async def EditEntry(body: EditEntryBody):
+async def EditEntry(body: EditEntryBody, user=Depends(get_current_user)):
     """
     Edits a single entry
     TODO: NOT IMPLEMENTED
     """
     return {
-        "user": body.user,
+        "user": user["username"],
         "id": body.id,
         "message": "Dummy response"
     }
@@ -132,23 +279,24 @@ class DeleteEntryBody(BaseModel):
     id: str
     user: str
 @app.delete("/api/v1/deleteentry", tags=["Dashboard"])
-async def DeleteEntry(body: DeleteEntryBody):
+async def DeleteEntry(body: DeleteEntryBody, user=Depends(get_current_user)):
     """
     Deletes the specified entry
     TODO: NOT IMPLEMENTED
     """
     return {
-        "user": body.user,
+        "user": user["username"],
         "id": body.id,
         "message": "Dummy response"
     }
 
 # S3 Endpoints
-@app.get("/api/v1/s3/listmultiparts", tags=["AWS S3"])
+@app.get("/api/v1/s3/listmultiparts", tags=["AWS S3", "DEPRECIATED"])
 async def listmultipart():
     """
     Temporary endpoint to list s3 multipart uploads
     """
+    return "DEPRECIATED"
     try:
         return s3.list_multipart_uploads(Bucket=S3BUCKET)["Uploads"]
     except KeyError:
@@ -158,11 +306,11 @@ class createmultipartBody(BaseModel):
     metadata: Dict[str, str]
     contenttype: str
 @app.post("/api/v1/s3/createmultipart", tags=["AWS S3"])
-async def createmultipart(body: createmultipartBody):
+async def createmultipart(body: createmultipartBody, user=Depends(get_current_user)):
     """
     Creates a multipart upload
     """
-    userid = "c21782c1-873a-4b79-a3cf-c6a9d25c2e6a" # TODO: Replace me with actual UUID
+    userid = user["sub"]
     key = userid+"-"+body.filename
     response = s3.create_multipart_upload(
         Bucket=S3BUCKET,
@@ -180,7 +328,7 @@ class abortmultipartBody(BaseModel):
     key: str
     uploadid: str
 @app.post("/api/v1/s3/abortmultipart", tags=["AWS S3"])
-async def abortmultipart(body: abortmultipartBody):
+async def abortmultipart(body: abortmultipartBody, _=Depends(get_current_user)):
     try:
         s3.abort_multipart_upload(
             Bucket=S3BUCKET,
@@ -200,7 +348,7 @@ class completemultipartBody(BaseModel):
     uploadid: str
     parts: List[partSchema]
 @app.post("/api/v1/s3/completemultipart", tags=["AWS S3"])
-async def completemultipart(body: completemultipartBody):
+async def completemultipart(body: completemultipartBody, _=Depends(get_current_user)):
     try:
         parts = [
             {
@@ -226,7 +374,7 @@ class signedurlBody(BaseModel):
     uploadid: str
     partnumber: int
 @app.post("/api/v1/s3/signedurl", tags=["AWS S3"])
-async def signedurl(body: signedurlBody):
+async def signedurl(body: signedurlBody, _=Depends(get_current_user)):
     """
     Generates a presigned URL for multipart upload
     """
@@ -250,7 +398,7 @@ class listpartsBody(BaseModel):
     key: str
     uploadid: str
 @app.post("/api/v1/s3/listparts", tags=["AWS S3"])
-async def listparts(body: listpartsBody):
+async def listparts(body: listpartsBody, _=Depends(get_current_user)):
     """
     Returns the parts of a multipartupload that have already been uploaded
     """
@@ -261,24 +409,28 @@ async def listparts(body: listpartsBody):
     except KeyError as err: # The parts key will not exist if no parts have been uploaded
         raise HTTPException(status_code=400, detail="No parts uploaded!")
 
-@app.delete("/api/v1/uploads/{id}", tags=["AWS S3"])
-async def cancel_upload(id: str):
-    # TODO: Verify user owns this upload via OAuth token
-    # TODO: Abort S3 multipart upload
-    # TODO: Update database status to canceled
-    
-    return {
-        "status": "success",
-        "message": f"Upload {id} has been successfully aborted."
-    }
+# Serve homepage
+@app.get("/")
+async def home():
+    return FileResponse("./static/index.html")
+@app.get("/styles.css")
+async def home():
+    return FileResponse("./static/styles.css")
+@app.get("/scripting.js")
+async def home():
+    return FileResponse("./static/scripting.js")
 
 # Serve HTML, keep at bottom
 STATIC = Path(__file__).parent / "static"
-@app.get("{full_path:path}", tags=["HTML"])
-async def ServeHTML(full_path: str):
+@app.get("{full_path:path}")
+async def ServeHTML(full_path: str, session: str = Cookie(None)):
     """
     Serves static web files (HTML, CSS, etc.)
     """
+    try:
+        get_current_user(session)
+    except HTTPException:
+        return RedirectResponse("/?error=\"Please login!\"")
     if full_path == "/" or full_path == "":
         full_path = "index.html"
     elif ".css" in full_path or ".js" in full_path:
