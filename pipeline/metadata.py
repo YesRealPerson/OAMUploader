@@ -1,9 +1,14 @@
 """
+(4)
 Extract metadata
  - GeoTIFF metadata via GDAL
  - Generate thumbnail
  - Store in appropriate shared folder
 """
+import os
+import rasterio
+import json
+
 def extract_metadata(path, out_dir):
     if not os.path.exists(path):
         return None
