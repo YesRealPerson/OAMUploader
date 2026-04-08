@@ -64,6 +64,10 @@ TODO: Add checking for the current user, currently the API is very insecure and 
 TODO: Remove raw responses later, currently only for debugging purposes
 TODO: Remove list multipart uploads
 TODO: Specify response schemas when everything is finalized
+TODO: Local pgSQL for dashboard endpoints
+TODO: Golden Retriever
+TODO: Lower bandwidth handling by reducing max simulataneous connections
+https://github.com/hotosm/drone-tm/blob/e8978bcbf42f81f372e2477a9c29ecf523fdec46/src/frontend/src/components/DroneOperatorTask/DescriptionSection/UppyFileUploader/index.tsx#L72
 """
 CLIENT_ID = os.getenv("OAUTH_CLIENT")
 CLIENT_SECRET = os.getenv("OAUTH_SECRET")
@@ -71,13 +75,13 @@ REDIRECT_URI = os.getenv("REDIRECT_URI")
 AUTHORIZE_URL_OSM = "https://www.openstreetmap.org/oauth2/authorize"
 TOKEN_URL_OSM = "https://www.openstreetmap.org/oauth2/token"
 
-# Example Methods
-@app.get("/api/v1/login")
+# OAuth
+@app.get("/api/v1/login", tags=["OAuth"])
 async def osmlogin():
     url = f"{AUTHORIZE_URL_OSM}?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&scope=openid"
     return RedirectResponse(url)
 
-@app.get("/api/v1/authenticate")
+@app.get("/api/v1/authenticate", tags=["OAuth"])
 async def authenticate(code: str):
     async with httpx.AsyncClient() as client:
         payload = {"grant_type": "authorization_code",
@@ -257,7 +261,7 @@ async def listparts(body: listpartsBody):
     except KeyError as err: # The parts key will not exist if no parts have been uploaded
         raise HTTPException(status_code=400, detail="No parts uploaded!")
 
-@app.delete("/api/v1/uploads/{id}")
+@app.delete("/api/v1/uploads/{id}", tags=["AWS S3"])
 async def cancel_upload(id: str):
     # TODO: Verify user owns this upload via OAuth token
     # TODO: Abort S3 multipart upload
@@ -270,7 +274,7 @@ async def cancel_upload(id: str):
 
 # Serve HTML, keep at bottom
 STATIC = Path(__file__).parent / "static"
-@app.get("{full_path:path}")
+@app.get("{full_path:path}", tags=["HTML"])
 async def ServeHTML(full_path: str):
     """
     Serves static web files (HTML, CSS, etc.)
