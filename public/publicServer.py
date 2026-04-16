@@ -1,6 +1,6 @@
 import secrets
 
-from fastapi import FastAPI, HTTPException, Depends, Cookie
+from fastapi import FastAPI, HTTPException, Depends, Cookie, Header
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 import botocore.exceptions
 from pathlib import Path
@@ -106,24 +106,69 @@ def create_session_token(user_id: str, username: str):
     return token
 def create_refresh_token():
     return secrets.token_urlsafe(64)
-def get_current_user(session: str = Cookie(None)):
-    if not session:
-        raise HTTPException(status_code=401, detail="Not logged in")
 
-    try:
-        payload = jwt.decode(session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
-    except JWTError as e:
-        print(e)
-        raise HTTPException(status_code=401, detail="Invalid session")
-    except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Expired session")
+# def get_current_user(session: str = Cookie(None)):
+#     if not session:
+#         raise HTTPException(status_code=401, detail="Not logged in")
+
+#     try:
+#         payload = jwt.decode(session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+#         return payload
+#     except JWTError as e:
+#         print(e)
+#         raise HTTPException(status_code=401, detail="Invalid session")
+#     except ExpiredSignatureError:
+#         raise HTTPException(status_code=401, detail="Expired session")
+
+
+api_token_db: dict[str, dict] = {}
+
+
+def generate_api_token(user_id: str, username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    api_token_db[token] = {"user_id": user_id, "username": username}
+    return token
+
+def verify_api_token(token: str) -> dict | None:
+    return api_token_db.get(token)
+
+def get_current_user(session: str = Cookie(None), authorization: str = Header(None)):
+    """
+    Accepts either:
+      A) session cookie (browser/OAuth users)
+      B) Authorization: Bearer <api_token> header (programmatic access)
+    """
+    errors = []
+
+    # Try API token first
+    if authorization:
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=400, detail="Authorization header must use Bearer scheme: 'Authorization: Bearer <token>'")
+        token = authorization.removeprefix("Bearer ")
+        payload = verify_api_token(token)
+        if payload:
+            return {"sub": payload["user_id"], "username": payload["username"]}
+        errors.append("API token invalid or not found")
+    
+    # Try session cookie
+    if session:
+        try:
+            return jwt.decode(session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        except ExpiredSignatureError:
+            errors.append("Session cookie expired")
+        except JWTError:
+            errors.append("Session cookie invalid")
+    
+    if not session and not authorization:
+        raise HTTPException(status_code=401, detail="No credentials provided. Pass a session cookie or 'Authorization: Bearer <api_token>' header")
+    
+    raise HTTPException(status_code=401, detail=f"Authentication failed: {'; '.join(errors)}")
+
 
 # tester
 @app.get("/api/v1/testget", tags=["testing"])
 async def testget(user=Depends(get_current_user)):
     return "Hello "+user["username"]
-
 
 # Authentication endpoints
 @app.get("/api/v1/login", tags=["redirects"])
@@ -230,10 +275,16 @@ async def authenticate(code: str, state: str, oauth_state: str = Cookie(None)):
 
     return response
 
+@app.post("/api/v1/auth/token", tags=["authentication"])
+async def create_api_token(user=Depends(get_current_user)):
+    """Generate an API token for the current user."""
+    token = generate_api_token(user["sub"], user["username"])
+    return {"token": token}
+
 @app.get("/api/v1/getuser")
 async def GetUser(session: str = Cookie(None)):
     try:
-        user = get_current_user(session)
+        user = get_current_user(session, None)
         return {
             'status': 1,
             'user': user["username"]
@@ -428,7 +479,7 @@ async def ServeHTML(full_path: str, session: str = Cookie(None)):
     Serves static web files (HTML, CSS, etc.)
     """
     try:
-        get_current_user(session)
+        get_current_user(session, None)
     except HTTPException:
         return RedirectResponse("/?error=\"Please login!\"")
     if full_path == "/" or full_path == "":
