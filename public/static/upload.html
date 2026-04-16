@@ -107,7 +107,15 @@
 
     <script type="module">
         // TODO: Allow multiple uploads at once, requires different forms per file!
-        import { Uppy, Dashboard, AwsS3, Form } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
+        import { Uppy, Dashboard, AwsS3, Form, GoogleDrivePicker, Dropbox } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
+
+        const COMPANION_URL = 'http://localhost:3020'; // Companion server
+        const COMPANION_ALLOWED_HOSTS = [COMPANION_URL];
+
+        const GOOGLE_CLIENT_ID = null;
+        const GOOGLE_API_KEY = null;
+        const GOOGLE_APP_ID = null;
+
 
         const uppy = new Uppy({
             autoProceed: false, // So uppy only uploads when the metadata is finalized, "By default, Uppy used to begin uploading right after you selected a file."
@@ -117,6 +125,21 @@
             },
         });
 
+        uppy.setOptions({
+            onBeforeUpload: (files) => {
+                try {
+                    for (const id of Object.keys(files)) {
+                validateMetadata(files[id].meta);
+                }  
+                return true;
+            } catch (err) {
+                uppy.info(err.message, 'error', 5000);
+                return false;
+                }
+            },
+        });
+
+
         uppy.use(Dashboard, {
             target: '#uppy',
             inline: true,
@@ -124,6 +147,24 @@
             width: '100%',
             height: 450,
         });
+
+        if (GOOGLE_CLIENT_ID && GOOGLE_API_KEY && GOOGLE_APP_ID) {
+        uppy.use(GoogleDrivePicker, {
+            target: Dashboard,
+            companionUrl: COMPANION_URL,
+            companionAllowedHosts: COMPANION_ALLOWED_HOSTS,
+            clientId: GOOGLE_CLIENT_ID,
+            apiKey: GOOGLE_API_KEY,
+            appId: GOOGLE_APP_ID,
+        });
+    }
+        uppy.use(Dropbox,{
+            target: Dashboard,
+            companionUrl: COMPANION_URL,
+            companionAllowedHosts: COMPANION_ALLOWED_HOSTS,
+        });
+    
+
 
         uppy.use(Form, {
             target: '#metadata',
@@ -169,15 +210,13 @@
 
             async createMultipartUpload(file) {
 
-                let metadata = validateMetadata(file.meta)
-
                 const res = await fetch('/api/v1/s3/createmultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         filename: file.name,
                         contenttype: file.type,
-                        metadata: metadata
+                        metadata: file.meta
                     }),
                 });
                 if (!res.ok) throw new Error('Failed to create multipart upload');
