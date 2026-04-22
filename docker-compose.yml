@@ -6,6 +6,7 @@ services:
       context: . 
       dockerfile: ./public/Dockerfile.dev
     image: oam-uploader-public:latest
+    env_file: ./public/stub.env
     volumes:
       - ./public:/app
       - ./temporary:/temporary
