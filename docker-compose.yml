@@ -21,3 +21,16 @@ services:
       - ./temporary:/temporary
     ports:
       - "7070:7070"
+
+  companion:
+      image: transloadit/companion:latest
+      env_file: ./companion/.env
+      ports:
+        - "3020:3020"
+      volumes:
+        - companion-data:/companion-data
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+
+volumes:
+  companion-data:
