@@ -7,6 +7,7 @@ Extract metadata
 import os
 from rio_cogeo import cog_info
 import rasterio
+import sys
 from rasterio.enums import Resampling
 
 def extract_metadata(path, out_dir):
@@ -34,4 +35,4 @@ def extract_metadata(path, out_dir):
 
 # C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1\\tester1.tif
 # C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1
-print(extract_metadata(sys.argv[1], sys.argv[2]))
+extract_metadata(sys.argv[1], sys.argv[2])

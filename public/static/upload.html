@@ -180,7 +180,7 @@
                         metadata: metadata
                     }),
                 });
-                if (!res.ok) throw new Error('Failed to create multipart upload');
+                if (!res.ok) throw new Error((await res.json())['detail']);
                 return await res.json();
             },
 

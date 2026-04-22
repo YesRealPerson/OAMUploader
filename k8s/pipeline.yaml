@@ -1,0 +1,168 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: geotiff-processing-pipeline-
+spec:
+  entrypoint: entry
+  # Needs changes to be used with an authenticated s3, for now using local stuff
+  arguments:
+    parameters:
+      - name: s3-input-path
+      - name: s3-output-path 
+
+  # Volume claim for shared storage for pipeline steps
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 25Gi
+
+  templates:
+    # DAG for pipeline steps
+    - name: entry
+      dag:
+        tasks:
+          - name: download # Download from s3
+            template: s3-download
+          - name: validate # Validate file
+            dependencies: [download]
+            template: validate-geotiff
+          - name: convert-to-cog # Convert to cog
+            dependencies: [validate]
+            template: rio-cogeo-convert
+          - name: extract-metadata # Extract metadata
+            dependencies: [validate]
+            template: get-metadata
+          - name: upload # Upload cog to s3 
+            dependencies: [convert-to-cog]
+            template: s3-upload
+          - name: stac # Upload metadata to pgSTAC
+            dependencies: [extract-metadata]
+            template: stac-upload
+            
+    - name: s3-download
+      container:
+        image: amazon/aws-cli:latest
+        env: # AWS Authentication
+          - name: AWS_ACCESS_KEY_ID
+            value: test
+          - name: AWS_SECRET_ACCESS_KEY
+            value: test
+          - name: AWS_DEFAULT_REGION
+            value: us-east-1
+        command: [sh, -c]
+        args: ["aws --endpoint-url=http://host.docker.internal:4566 s3 cp {{workflow.parameters.s3-input-path}} /data/input.tif"]
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"
+
+    - name: validate-geotiff
+      container:
+        image: validate:dev
+        env:
+          - name: GDAL_CACHEMAX
+            value: "1024"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "2"
+          limits:
+            memory: "2Gi"
+            cpu: "4"
+        imagePullPolicy: Never
+        command: [python, script.py]
+        args: 
+          - "/data/input.tif"
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"
+        expression: "lastNode.exitCode != 5 && lastNode.exitCode != 6 && lastNode.exitCode != 7"
+
+    - name: rio-cogeo-convert
+      container:
+        image: convert:dev
+        env:
+          - name: GDAL_CACHEMAX
+            value: "1024"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "2"
+          limits:
+            memory: "4Gi"
+            cpu: "4"
+        imagePullPolicy: Never
+        command: [python, script.py]
+        args: 
+          - "/data/input.tif"
+          - "/data/output.tif"
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"
+
+    - name: get-metadata
+      container:
+        image: metadata:dev
+        imagePullPolicy: Never
+        command: [python, script.py]
+        args: 
+          - "/data/input.tif"
+          - "/data/"
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"
+
+    - name: s3-upload
+      container:
+        image: amazon/aws-cli:latest
+        env: # AWS Authentication
+          - name: AWS_ACCESS_KEY_ID
+            value: test
+          - name: AWS_SECRET_ACCESS_KEY
+            value: test
+          - name: AWS_DEFAULT_REGION
+            value: us-east-1
+        command: [sh, -c]
+        args:
+          - aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-output-path}}cog.tif
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"
+
+    - name: stac-upload # Figure this out later...
+      container:
+        image: amazon/aws-cli:latest
+        env: # AWS Authentication
+          - name: AWS_ACCESS_KEY_ID
+            value: test
+          - name: AWS_SECRET_ACCESS_KEY
+            value: test
+          - name: AWS_DEFAULT_REGION
+            value: us-east-1
+        command: [sh, -c]
+        args:
+          - aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/metadata.json {{workflow.parameters.s3-output-path}}metadata.json
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"

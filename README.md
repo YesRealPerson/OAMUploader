@@ -24,6 +24,13 @@ Point docker commands to minikube
 minikube -p minikube docker-env --shell powershell | Invoke-Expression
 ```
 
+Install Argo Workflows
+```
+kubectl create namespace argo
+kubectl apply --server-side -n argo -f "https://github.com/argoproj/argo-workflows/releases/download/v4.0.4/quick-start-minimal.yaml"
+```
+This uses the quick start commands which should be changed later.
+
 Build production containers
 ```
 docker build -t oam-uploader-public:latest -f public/Dockerfile . 

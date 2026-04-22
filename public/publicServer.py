@@ -311,7 +311,12 @@ async def createmultipart(body: createmultipartBody, user=Depends(get_current_us
     Creates a multipart upload
     """
     userid = user["sub"]
-    key = userid+"-"+body.filename
+    key = userid+"/"+body.metadata["title"]+"/raw.tif"
+    try:
+        s3.head_object(Bucket=S3BUCKET, Key=key)
+        raise HTTPException(400, "Dataset of the same title already exists!")
+    except botocore.exceptions.ClientError:
+        pass
     response = s3.create_multipart_upload(
         Bucket=S3BUCKET,
         Metadata=body.metadata,
