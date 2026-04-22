@@ -1,23 +1,24 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: private-deployment
+  name: private-job
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: private
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
-        app: private
+        app: private-job
     spec:
+      restartPolicy: Never
       containers:
         - name: private
           image: oam-uploader-private:latest
           imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 7070
+          command: ["python", "pipeline/run_pipeline.py"]
+          args:
+            - "--input"
+            - "/mnt/temporary/<file_name>.tif"
           volumeMounts:
             - name: temporary-files
               mountPath: /mnt/temporary
