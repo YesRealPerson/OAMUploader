@@ -7,8 +7,7 @@ spec:
   # Needs changes to be used with an authenticated s3, for now using local stuff
   arguments:
     parameters:
-      - name: s3-input-path
-      - name: s3-output-path 
+      - name: s3-path
 
   # Volume claim for shared storage for pipeline steps
   volumeClaimTemplates:
@@ -54,7 +53,7 @@ spec:
           - name: AWS_DEFAULT_REGION
             value: us-east-1
         command: [sh, -c]
-        args: ["aws --endpoint-url=http://host.docker.internal:4566 s3 cp {{workflow.parameters.s3-input-path}} /data/input.tif"]
+        args: ["aws --endpoint-url=http://host.docker.internal:4566 s3 cp {{workflow.parameters.s3-path}}raw.tif /data/input.tif"]
         volumeMounts:
           - name: workspace
             mountPath: /data
@@ -139,7 +138,9 @@ spec:
             value: us-east-1
         command: [sh, -c]
         args:
-          - aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-output-path}}cog.tif
+          - >
+            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog.tif &&
+            aws --endpoint-url=http://host.docker.internal:4566 s3 rm {{workflow.parameters.s3-path}}raw.tif
         volumeMounts:
           - name: workspace
             mountPath: /data
@@ -159,7 +160,9 @@ spec:
             value: us-east-1
         command: [sh, -c]
         args:
-          - aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/metadata.json {{workflow.parameters.s3-output-path}}metadata.json
+          - >
+            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/metadata.json {{workflow.parameters.s3-path}}metadata.json &&
+            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/thumbnail.png {{workflow.parameters.s3-path}}thumbnail.png
         volumeMounts:
           - name: workspace
             mountPath: /data

@@ -1,0 +1,37 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oam-front-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: oam-front
+  template:
+    metadata:
+      labels:
+        app: oam-front
+    spec:
+      containers:
+      - name: oam-front
+        image: oam-uploader-front:latest
+        envFrom:
+        - secretRef:
+            name: oam-vars
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 12345
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: oam-front-service
+spec:
+  selector:
+    app: oam-front
+  ports:
+  - port: 12345
+    targetPort: 12345
+  type: LoadBalancer

@@ -4,12 +4,8 @@ Updated imagery uploader that integrates with the modernized backend, replacing 
 
 # Development
 ```
-docker compose up --build -d
-docker compose down
-```
 
-# TODO
- - Setup workflows
+```
 
 # K8s
 ## Running
@@ -31,28 +27,23 @@ kubectl apply --server-side -n argo -f "https://github.com/argoproj/argo-workflo
 ```
 This uses the quick start commands which should be changed later.
 
-Build production containers
+Build production containers (cd into the public directory)
 ```
-docker build -t oam-uploader-public:latest -f public/Dockerfile . 
-docker build -t oam-uploader-private:latest -f private/Dockerfile . 
-```
-
-Apply deployments and services
-
-```
-kubectl apply -f ./k8s/pv.yaml
-kubectl apply -f ./k8s/pvc.yaml
-kubectl apply -f ./k8s/private-deployment.yaml
-kubectl apply -f ./k8s/public-deployment.yaml
-kubectl apply -f ./k8s/private-service.yaml
-kubectl apply -f ./k8s/public-service.yaml
+docker build -t oam-uploader-front:latest -f Dockerfile . 
 ```
 
-Get URL for viewing
+Apply deployment and service
 ```
-minikube service public-service --url    # for public
-minikube service private-service --url   # for private
+kubectl apply -f ./k8s/public.yaml
 ```
+
+Port forward service
+```
+kubectl port-forward svc/oam-front-service 12345:12345
+```
+
+Open the following in your browser
+http://127.0.0.1:12345/
 
 ## Useful commands
 
@@ -64,7 +55,6 @@ kubectl get services
 
 Delete all pods/services
 ```
-kubectl delete pv temp-pv    # kills persistent volume
 kubectl delete all --all     # kills all pods & services
 ```
 

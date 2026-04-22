@@ -14,7 +14,6 @@ docker build -t validate:dev ./pipeline/validate
 
 ```
 argo submit -n argo --watch \
-    --parameter s3-input-path="s3://testbucket/{userid}/{title}/raw.tif" \
-    --parameter s3-output-path="s3://testbucket/{userid}/{title}/ \
+    --parameter s3-path="s3://testbucket/{userid}/{title}/raw.tif" \
     ./k8s/pipeline.yaml
 ```
