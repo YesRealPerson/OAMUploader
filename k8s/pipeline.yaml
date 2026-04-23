@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
-kind: Workflow
+kind: WorkflowTemplate
 metadata:
-  generateName: geotiff-processing-pipeline-
+  name: geotiff-processing-template
 spec:
   entrypoint: entry
   # Needs changes to be used with an authenticated s3, for now using local stuff
@@ -29,18 +29,28 @@ spec:
           - name: validate # Validate file
             dependencies: [download]
             template: validate-geotiff
+            continueOn:
+              failed: true
           - name: convert-to-cog # Convert to cog
             dependencies: [validate]
             template: rio-cogeo-convert
+            when: "{{tasks.validate.exitCode}} == 0"
           - name: extract-metadata # Extract metadata
             dependencies: [validate]
             template: get-metadata
+            when: "{{tasks.validate.exitCode}} == 0"
           - name: upload # Upload cog to s3 
             dependencies: [convert-to-cog]
             template: s3-upload
+            when: "{{tasks.validate.exitCode}} == 0 && {{tasks.convert-to-cog.exitCode}} == 0"
           - name: stac # Upload metadata to pgSTAC
             dependencies: [extract-metadata]
             template: stac-upload
+            when: "{{tasks.validate.exitCode}} == 0 && {{tasks.extract-metadata.exitCode}} == 0"
+          - name: cleanup-on-failure
+            dependencies: [validate]
+            template: cleanup
+            when: "{{tasks.validate.exitCode}} == 5 || {{tasks.validate.exitCode}} == 6 || {{tasks.validate.exitCode}} == 7"
             
     - name: s3-download
       container:
@@ -81,10 +91,10 @@ spec:
         volumeMounts:
           - name: workspace
             mountPath: /data
-      retryStrategy:
-        limit: "3"
-        retryPolicy: "OnFailure"
-        expression: "lastNode.exitCode != 5 && lastNode.exitCode != 6 && lastNode.exitCode != 7"
+      # retryStrategy:
+      #   limit: "3"
+      #   retryPolicy: "OnFailure"
+      #   expression: "lastNode.exitCode != 5 && lastNode.exitCode != 6 && lastNode.exitCode != 7"
 
     - name: rio-cogeo-convert
       container:
@@ -139,8 +149,7 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog.tif &&
-            aws --endpoint-url=http://host.docker.internal:4566 s3 rm {{workflow.parameters.s3-path}}raw.tif
+            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog.tif
         volumeMounts:
           - name: workspace
             mountPath: /data
@@ -169,3 +178,19 @@ spec:
       retryStrategy:
         limit: "3"
         retryPolicy: "OnFailure"
+
+    - name: cleanup
+      container:
+        image: amazon/aws-cli:latest
+        env: # AWS Authentication
+          - name: AWS_ACCESS_KEY_ID
+            value: test
+          - name: AWS_SECRET_ACCESS_KEY
+            value: test
+          - name: AWS_DEFAULT_REGION
+            value: us-east-1
+        command: [sh, -c]
+        args:
+          - >
+            aws --endpoint-url=http://host.docker.internal:4566 s3 rm {{workflow.parameters.s3-path}} --recursive &&
+            exit 1

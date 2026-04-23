@@ -1,108 +1,155 @@
 <!DOCTYPE html>
 <html>
 
+<html lang="en">
+
 <head>
-    <title>OAM Uploader</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+
+    <link rel="icon" href="%BASE_URL%/meta/favicon.png" type="image/png" sizes="32x32" />
+    <link rel="icon" href="%BASE_URL%/meta/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="%BASE_URL%/meta/apple-touch-icon.png" />
+
+    <meta property="og:image" content="%BASE_URL%/meta/meta-image.png" />
+    <meta name="twitter:image" content="%BASE_URL%/meta/meta-image.png" />
+    <meta property="og:url" content="%BASE_URL%/" />
+
+    <title>OpenAerialMap</title>
+    <meta name="title" content="OpenAerialMap" />
+    <meta name="description"
+        content="An open service to provide access to a commons of openly licensed imagery and map layer services." />
+
+    <style>
+        html * {
+            font-family:
+                system-ui,
+                -apple-system,
+                BlinkMacSystemFont,
+                'Segoe UI',
+                Roboto,
+                Oxygen,
+                Ubuntu,
+                Cantarell,
+                'Open Sans',
+                'Helvetica Neue',
+                sans-serif;
+        }
+    </style>
+
+    <!-- Web Awesome Styling (CDN) -->
+    <link rel="stylesheet" href="https://early.webawesome.com/webawesome@3.0.0-beta.1/dist/styles/themes/default.css" />
+    <link rel="stylesheet" href="https://early.webawesome.com/webawesome@3.0.0-beta.1/dist/styles/webawesome.css" />
+
     <link href="./styles.css" rel="stylesheet">
     <link href="https://releases.transloadit.com/uppy/v5.2.1/uppy.min.css" rel="stylesheet">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@100..900&display=swap" rel="stylesheet">
 </head>
 <script src="./scripting.js" defer></script>
 <script defer>
-	const main = async () => {
-		let response = await (await fetch("/api/v1/getuser")).json()
-		console.log(response)
-		if(response.status == 0){
-			document.getElementById("status").innerText = "Not logged in!"
-		}else{
-			document.getElementById("status").innerText = `Hello, ${response.user}!`
-		}
-	}
-	main()
+    const main = async () => {
+        let response = await (await fetch("/api/v1/getuser")).json()
+        console.log(response)
+        if (response.status == 0) {
+            document.getElementById("status").innerText = "Not logged in!"
+        } else {
+            document.getElementById("status").innerText = `Hello, ${response.user}!`
+        }
+    }
+    main()
 </script>
 <header style="display: flex; justify-content: space-between;">
-	<div>
-    <a href="/">Home</a>
-    <a href="/dashboard">Dashboard</a>
-    <a href="/upload">Upload</a>
-    <a href="/docs">Docs</a>
-	</div>
-	<div>
-		<span id="status">Loading</span>
-	</div>
+    <div>
+        <a href="/">Home</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/upload">Upload</a>
+        <a href="/docs">Docs</a>
+    </div>
+    <div>
+        <span id="status">Loading</span>
+    </div>
 </header>
-<body>
+
+<body style="padding: 0 0 5vh 0;">
     <h1>Upload</h1>
     <div id="uppy-container">
         <form id="metadata">
             <h3>Upload Imagery</h3>
             <hr>
             <label for="title">Title*</label>
-            <input type="text" name="title" placeholder="Dataset title" required/>
-            
+            <input type="text" name="title" placeholder="Dataset title" required />
+
             <label for="platform">Platform*</label>
-            <div>
-                <input id="satellite" type="radio" name="platform" value="satellite">
-                <label for="satellite">Satellite</label>
-                <input id="aircraft" type="radio" name="platform" value="aircraft">
-                <label for="aircraft">Aircraft</label>
-                <input id="uav" type="radio" name="platform" value="uav">
-                <label for="uav">UAV</label>
-                <input id="balloon" type="radio" name="platform" value="balloon">
-                <label for="balloon">Balloon</label>
-                <input id="kite" type="radio" name="platform" value="kite">
-                <label for="kite">Kite</label>
+            <div id="platformradios">
+                <div>
+                    <input id="satellite" type="radio" name="platform" value="satellite">
+                    <label for="satellite">Satellite</label>
+                </div>
+                <div>
+                    <input id="aircraft" type="radio" name="platform" value="aircraft">
+                    <label for="aircraft">Aircraft</label>
+                </div>
+                <div>
+                    <input id="uav" type="radio" name="platform" value="uav">
+                    <label for="uav">UAV</label>
+                </div>
+                <div>
+                    <input id="balloon" type="radio" name="platform" value="balloon">
+                    <label for="balloon">Balloon</label>
+                </div>
+                <div>
+                    <input id="kite" type="radio" name="platform" value="kite">
+                    <label for="kite">Kite</label>
+                </div>
             </div>
 
             <label for="sensor">Sensor</label>
-            <input type="text" name="sensor" placeholder="Type/model"/>
+            <input type="text" name="sensor" placeholder="Type/model" />
             <div class="subtitle">
                 Type or model of image sensor or camera used (ex: Worldview-3).
             </div>
-            
+
             <label for="acqdatestart">Acquisition Date (start)*</label>
-            <input type="datetime-local" name="acqdatestart" required/>
+            <input type="datetime-local" name="acqdatestart" required />
             <div class="subtitle">
                 If the exact start time is unknown using 00:00:00 will suffice.
             </div>
-            
+
             <label for="acqdateend">Acquisition Date (end)</label>
-            <input type="datetime-local" name="acqdateend"/>
+            <input type="datetime-local" name="acqdateend" />
             <div class="subtitle">
                 If the exact end time is unknown using 23:59:59 will suffice.
             </div>
-            
+
             <label for="provider">Provider*</label>
-            <input type="text" name="provider" placeholder="Your name or organization" required/>
+            <input type="text" name="provider" placeholder="Your name or organization" required />
             <div class="subtitle">
                 Name of company or individual that collected or provided the imagery.
             </div>
-            
+
             <!-- TODO: Default to user login email -->
             <label for="contact">Contact*</label>
-            <input type="email" name="contact" placeholder="Your email" required/>
-            
+            <input type="email" name="contact" placeholder="Your email" required />
+
             <label for="license">License*</label>
             <select name="license" required>
                 <option value="0">CC-BY 4.0</option>
                 <option value="1">CC BY-NC 4.0</option>
                 <option value="2">CC BY-SA 4.0</option>
             </select>
-            
+
             <label for="tags">Tags</label>
-            <input type="text" name="tags" placeholder="Comma separated tags"/>
+            <input type="text" name="tags" placeholder="Comma separated tags" />
             <div class="subtitle">
                 Any additional metadata tags applicable to the dataset.
             </div>
         </form>
-        <div>
-            Only georeferenced TIFF files in natural colors or monochrome ones (4 bands or less, 8 bits) are accepted.
-        </div>
         <div id="uppy"></div>
-        <div style="margin-top: 1rem;">*Required</div>
-        
+        <div style="margin-top: .25rem;">*Required
+            <div style="font-size: 1rem;">
+                Only georeferenced TIFF files in natural colors or monochrome ones (4 bands or less, 8 bits) are
+                accepted.
+            </div>
+        </div>
     </div>
 
     <script type="module">
@@ -132,7 +179,7 @@
         })
 
         class MetadataError extends Error { // Shamelessly stolen from the internet lmao
-            constructor(message){
+            constructor(message) {
                 super(message)
                 this.name = "ValidationError"
             }
@@ -150,7 +197,7 @@
             let others = ["sensor", "acqdateend", "tags"]
             let final = {}
             Object.keys(required).forEach((key) => {
-                if(!metadata[key]){
+                if (!metadata[key]) {
                     throw new MetadataError(`Invalid metadata, missing field: ${required[key]}`)
                 }
                 final[key] = metadata[key]
@@ -188,10 +235,10 @@
                 const res = await fetch('/api/v1/s3/signedurl', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        'uploadid': uploadId, 
-                        'key': key, 
-                        'partnumber': partNumber 
+                    body: JSON.stringify({
+                        'uploadid': uploadId,
+                        'key': key,
+                        'partnumber': partNumber
                     }),
                     signal,
                 });
@@ -203,9 +250,9 @@
                 const res = await fetch('/api/v1/s3/listparts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        'uploadid': uploadId, 
-                        'key': key 
+                    body: JSON.stringify({
+                        'uploadid': uploadId,
+                        'key': key
                     }),
                     signal,
                 });
@@ -217,10 +264,10 @@
                 const res = await fetch('/api/v1/s3/completemultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        'uploadid': uploadId, 
-                        'key': key, 
-                        'parts': parts 
+                    body: JSON.stringify({
+                        'uploadid': uploadId,
+                        'key': key,
+                        'parts': parts
                     }),
                 });
                 if (!res.ok) throw new Error('Failed to complete multipart upload');
@@ -231,9 +278,9 @@
                 await fetch('/api/v1/s3/abortmultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        'uploadid': uploadId, 
-                        'key': key 
+                    body: JSON.stringify({
+                        'uploadid': uploadId,
+                        'key': key
                     }),
                 });
             },
@@ -253,4 +300,5 @@
         });
     </script>
 </body>
+
 </html>

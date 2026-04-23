@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import secrets
 
 from fastapi import FastAPI, HTTPException, Depends, Cookie
@@ -12,6 +13,19 @@ from dotenv import load_dotenv
 import os
 from typing import Dict, List
 from jose import ExpiredSignatureError, JWTError, jwt
+from kubernetes import client, config
+from hotosm_auth import AuthConfig
+from hotosm_auth_fastapi import init_auth, osm_router, CurrentUser
+
+# Kubernetes Configuration
+# Use load_incluster_config() if running inside K8s, 
+# or load_kube_config() for local development.
+try:
+    config.load_incluster_config()
+except config.ConfigException:
+    config.load_kube_config()
+
+k8s_api = client.CustomObjectsApi()
 
 if(not os.getenv("PRODUCTION")):
     load_dotenv()
@@ -48,6 +62,12 @@ print("Buckets: ", buckets)
 if(not S3BUCKET in buckets):
     raise ValueError(S3BUCKET+" does not exist on AWS S3!")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    auth_config = AuthConfig.from_env()
+    init_auth(auth_config)
+    yield
 # FastAPI setup
 app = FastAPI(
     title="OAM Uploader API Reference",
@@ -55,11 +75,14 @@ app = FastAPI(
 [Home](/)
 [Dashboard](/dashboard)
 [Uploader](/upload)
-"""
+""",
+lifespan=lifespan
 )
 
-CLIENT_ID = os.environ.get("OAUTH_CLIENT", "test")
-CLIENT_SECRET = os.environ.get("OAUTH_SECRET", "test")
+app.include_router(osm_router, prefix="/api/auth/osm")
+
+CLIENT_ID = os.environ.get("OSM_CLIENT_ID", "test")
+CLIENT_SECRET = os.environ.get("OSM_CLIENT_SECRET", "test")
 REDIRECT_URI = os.environ.get("REDIRECT_URI", "test")
 AUTHORIZE_URL = "https://www.openstreetmap.org/oauth2/authorize"
 TOKEN_URL = "https://www.openstreetmap.org/oauth2/token"
@@ -118,12 +141,40 @@ def get_current_user(session: str = Cookie(None)):
         raise HTTPException(status_code=401, detail="Invalid session")
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Expired session")
+def invoke_processing(s3_path: str):
+    manifest = {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Workflow",
+        "metadata": {
+            "generateName": "geotiff-run-" # The instance name
+        },
+        "spec": {
+            "workflowTemplateRef": {
+                "name": "geotiff-processing-template" # Matches the name in template.yaml
+            },
+            "arguments": {
+                "parameters": [
+                    {"name": "s3-path", "value": s3_path} # Pass the parameter
+                ]
+            }
+        }
+    }
+    return k8s_api.create_namespaced_custom_object(
+        group="argoproj.io",
+        version="v1alpha1",
+        namespace="argo",
+        plural="workflows",
+        body=manifest,
+    )
 
 # tester
 @app.get("/api/v1/testget", tags=["testing"])
-async def testget(user=Depends(get_current_user)):
-    return "Hello "+user["username"]
-
+async def testget(user: CurrentUser):
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "username": user.username,
+    }
 
 # Authentication endpoints
 @app.get("/api/v1/login", tags=["redirects"])
@@ -291,16 +342,6 @@ async def DeleteEntry(body: DeleteEntryBody, user=Depends(get_current_user)):
     }
 
 # S3 Endpoints
-@app.get("/api/v1/s3/listmultiparts", tags=["AWS S3", "DEPRECIATED"])
-async def listmultipart():
-    """
-    Temporary endpoint to list s3 multipart uploads
-    """
-    return "DEPRECIATED"
-    try:
-        return s3.list_multipart_uploads(Bucket=S3BUCKET)["Uploads"]
-    except KeyError:
-        raise HTTPException(status_code=400, detail="No uploads have been started!")
 class createmultipartBody(BaseModel):
     filename: str
     metadata: Dict[str, str]
@@ -314,7 +355,7 @@ async def createmultipart(body: createmultipartBody, user=Depends(get_current_us
     key = userid+"/"+body.metadata["title"]+"/raw.tif"
     try:
         s3.head_object(Bucket=S3BUCKET, Key=key)
-        raise HTTPException(400, "Dataset of the same title already exists!")
+        # raise HTTPException(400, "Dataset of the same title already exists!")
     except botocore.exceptions.ClientError:
         pass
     response = s3.create_multipart_upload(
@@ -370,6 +411,10 @@ async def completemultipart(body: completemultipartBody, _=Depends(get_current_u
                 "Parts": parts
             }
         )
+
+        folder = "s3://"+S3BUCKET+"/"+body.key.replace("raw.tif", "")
+        print(invoke_processing(s3_path=folder))
+        
     except botocore.exceptions.ClientError as err:
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
     return 200
@@ -414,7 +459,7 @@ async def listparts(body: listpartsBody, _=Depends(get_current_user)):
     except KeyError as err: # The parts key will not exist if no parts have been uploaded
         raise HTTPException(status_code=400, detail="No parts uploaded!")
 
-# Serve homepage
+# Static files that should not require auth
 @app.get("/")
 async def home():
     return FileResponse("./static/index.html")
@@ -425,7 +470,7 @@ async def home():
 async def home():
     return FileResponse("./static/scripting.js")
 
-# Serve HTML, keep at bottom
+# STATIC FILES WHICH REQUIRES SESSION TOKEN
 STATIC = Path(__file__).parent / "static"
 @app.get("{full_path:path}")
 async def ServeHTML(full_path: str, session: str = Cookie(None)):

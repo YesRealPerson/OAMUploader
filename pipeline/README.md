@@ -1,6 +1,12 @@
 # Pipeline setup
 
 1. Point docker to minikube
+
+```
+minikube -p minikube docker-env --shell powershell | Invoke-Expression
+```
+
+
 2. Build images
 
 ```
@@ -9,11 +15,11 @@ docker build -t metadata:dev ./pipeline/metadata
 docker build -t validate:dev ./pipeline/validate
 ```
 
-3. Upload imagery using uploader
-4. Test Argo Workflow
+3. Upload template
 
 ```
-argo submit -n argo --watch \
-    --parameter s3-path="s3://testbucket/{userid}/{title}/raw.tif" \
-    ./k8s/pipeline.yaml
+argo template create pipeline.yaml -n argo
 ```
+
+Retain original filename for raw file
+Add failure messages back to the user
