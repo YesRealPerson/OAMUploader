@@ -46,7 +46,7 @@ cors_configuration = {
 
 # Amazon s3 session
 session = boto3.Session()
-s3 = boto3.client('s3')
+s3 = boto3.client('s3', region_name=os.environ.get("AWS_REGION", "us-east-1"))
 if(len(s3.list_buckets()["Buckets"]) == 0):
     print("Zero buckets!")
     if(os.getenv("AWS_ACCESS_KEY_ID") == "test"): # If we're in the testing environment we want to setup the bucket and cors policy 
@@ -469,6 +469,12 @@ async def completemultipart(body: completemultipartBody, user=Depends(get_curren
             }
             for p in body.parts
         ]
+
+        path = body.key.split("/")
+        folder = path[:-1]
+        file = path[-1]
+        folder = "s3://"+S3BUCKET+"/"+"/".join(folder)+"/"
+        argo = invoke_processing(s3_path=folder, filename=file, key=body.key, userid=user['sub'])['metadata']['name']
         s3.complete_multipart_upload(
             Bucket=S3BUCKET,
             UploadId=body.uploadid,
@@ -477,12 +483,6 @@ async def completemultipart(body: completemultipartBody, user=Depends(get_curren
                 "Parts": parts
             }
         )
-
-        path = body.key.split("/")
-        folder = path[:-1]
-        file = path[-1]
-        folder = "s3://"+S3BUCKET+"/"+"/".join(folder)+"/"
-        argo = invoke_processing(s3_path=folder, filename=file, key=body.key, userid=user['sub'])['metadata']['name']
         
     except botocore.exceptions.ClientError as err:
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
