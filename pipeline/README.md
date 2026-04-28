@@ -13,13 +13,13 @@ minikube -p minikube docker-env --shell powershell | Invoke-Expression
 docker build -t convert:dev ./pipeline/convert
 docker build -t metadata:dev ./pipeline/metadata
 docker build -t validate:dev ./pipeline/validate
+docker build -t stac:dev ./pipeline/stac
 ```
 
 3. Upload template
 
 ```
-argo template create pipeline.yaml -n argo
+argo template create ./k8s/pipeline.yaml -n argo
 ```
 
-Retain original filename for raw file
-Add failure messages back to the user
+TODO: More verbose failure messages

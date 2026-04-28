@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import secrets
 
-from fastapi import FastAPI, HTTPException, Depends, Cookie
+from fastapi import FastAPI, HTTPException, Depends, Cookie, Request
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 import botocore.exceptions
 from pathlib import Path
@@ -16,6 +16,8 @@ from jose import ExpiredSignatureError, JWTError, jwt
 from kubernetes import client, config
 from hotosm_auth import AuthConfig
 from hotosm_auth_fastapi import init_auth, osm_router, CurrentUser
+import uuid
+import re
 
 # Kubernetes Configuration
 # Use load_incluster_config() if running inside K8s, 
@@ -108,7 +110,18 @@ class User(BaseModel):
     user_id: str
     expires_at: datetime
     created_at: datetime
+class Upload(BaseModel):
+    id: str
+    status: str
+    state: str
+    message: str
+    userid: str
+    filename: str
+
 userdb:dict[str, User] = {} # Poor mans database for user refresh tokens, TODO: Update to be pgsql or similar
+uploaddb:dict[str, Upload] = {} # Poor mans database for in progress uploads
+usertoupload:dict[str,set[str]] = {}
+validStates = set()
 
 def create_session_token(user_id: str, username: str):
     """
@@ -126,6 +139,8 @@ def create_session_token(user_id: str, username: str):
     }
 
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    if str(user_id) not in usertoupload:
+        usertoupload[str(user_id)] = set()
     return token
 def create_refresh_token():
     return secrets.token_urlsafe(64)
@@ -141,7 +156,9 @@ def get_current_user(session: str = Cookie(None)):
         raise HTTPException(status_code=401, detail="Invalid session")
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Expired session")
-def invoke_processing(s3_path: str):
+def invoke_processing(s3_path: str, filename:str, key:str, userid: str):
+    uploadid = str(uuid.uuid4())
+    state = str(uuid.uuid4())
     manifest = {
         "apiVersion": "argoproj.io/v1alpha1",
         "kind": "Workflow",
@@ -154,11 +171,20 @@ def invoke_processing(s3_path: str):
             },
             "arguments": {
                 "parameters": [
-                    {"name": "s3-path", "value": s3_path} # Pass the parameter
+                    {"name": "s3-path", "value": s3_path},
+                    {"name": "filename", "value": filename},
+                    {"name": "bucket", "value": S3BUCKET},
+                    {"name": "key", "value": key},
+                    {"name": "id", "value": uploadid},
+                    {"name": "uuid", "value": userid},
+                    {"name": "state", "value": state}
                 ]
             }
         }
     }
+    validStates.add(state)
+    uploaddb[uploadid] = Upload(id=uploadid, status="Processing", message="Waiting for updates.", state=state, userid=userid, filename=filename)
+    usertoupload[userid].add(uploadid)
     return k8s_api.create_namespaced_custom_object(
         group="argoproj.io",
         version="v1alpha1",
@@ -167,14 +193,23 @@ def invoke_processing(s3_path: str):
         body=manifest,
     )
 
-# tester
-@app.get("/api/v1/testget", tags=["testing"])
-async def testget(user: CurrentUser):
-    return {
-        "user_id": user.id,
-        "email": user.email,
-        "username": user.username,
-    }
+class WorkflowStatusUpdate(BaseModel):
+    id: str
+    status: str
+    message: str=""
+@app.post("/api/v1/workflowstatus", include_in_schema=False)
+async def callback(body: WorkflowStatusUpdate, request: Request):
+    token = request.headers.get("X-Internal-Token")
+    if(token not in validStates or body.id not in uploaddb.keys()):
+        raise HTTPException(401)
+    uploaddb[body.id].status = body.status
+    uploaddb[body.id].message = body.message
+    print(body.id,body.status,body.message)
+    if(body.status == "Succeeded" or body.status == "Failed" or body.status == "Error"):
+        validStates.remove(token)
+        if not body.status == "Failed":
+            usertoupload[uploaddb[body.id].userid].remove(body.id)
+    return {"ok": True}
 
 # Authentication endpoints
 @app.get("/api/v1/login", tags=["redirects"])
@@ -281,7 +316,7 @@ async def authenticate(code: str, state: str, oauth_state: str = Cookie(None)):
 
     return response
 
-@app.get("/api/v1/getuser")
+@app.get("/api/v1/getuser", include_in_schema=False)
 async def GetUser(session: str = Cookie(None)):
     try:
         user = get_current_user(session)
@@ -296,50 +331,81 @@ async def GetUser(session: str = Cookie(None)):
         }
 
 # Dashboard Endpoints
-class GetEntriesBody(BaseModel):
-    count: int
 @app.get("/api/v1/getEntries", tags=["Dashboard"])
-async def GetEntries(body: GetEntriesBody, user=Depends(get_current_user)):
+async def GetEntries(count:int=50, user=Depends(get_current_user)):
     """
     Gets the next 'count' entries of the user.
-    TODO: NOT IMPLEMENTED
     """
-    return {
-        "count": body.count,
-        "user": user["username"],
-        "message": "Dummy response"
-    }
+    async with httpx.AsyncClient() as client:
+        # Search for items across collections, limited by the requested count 
+        response = await client.get(
+            "http://localhost:7777/search", 
+            params={
+                "limit": count,
+                "query": '{"properties.oam:uploaderid": {"eq": "'+user['sub']+'"}}'
+                }
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail="Failed to fetch entries")
+        
+        return {
+            "processing": [uploaddb[id] for id in usertoupload[user['sub']]],
+            "registered": response.json()
+        }
 
 class EditEntryBody(BaseModel):
     id: str
-    user: str
-    # TODO: Fillout with metadata form OIN specification
+    edits: Dict[str, str]
+
 @app.patch("/api/v1/editEntry", tags=["Dashboard"])
 async def EditEntry(body: EditEntryBody, user=Depends(get_current_user)):
     """
     Edits a single entry
-    TODO: NOT IMPLEMENTED
     """
-    return {
-        "user": user["username"],
-        "id": body.id,
-        "message": "Dummy response"
+    valid = {
+        'license': lambda x: x if x in ["CC-BY 4.0","CC BY-NC 4.0","CC BY-SA 4.0"] else False, 
+        'instruments': lambda x: [x], 
+        'oam:platform_type': lambda x: x if x in ["satellite", "aircraft", "uav", "balloon", "kite"] else False, 
+        'oam:producer_name': lambda x: x, 
+        'contact': lambda x: x
     }
+    async with httpx.AsyncClient() as client:
+        response = await client.get("http://localhost:7777/collections/openaerialmap/items/"+body.id)
+        if response.status_code != 200:
+            raise HTTPException(response.status_code)
+        response = response.json()
+        if response["properties"]["oam:uploaderid"] != user['sub']:
+            raise HTTPException(401)
+        for key in body.edits.keys():
+            if key in valid and valid[key](body.edits[key]):
+                response["properties"][key] = valid[key](body.edits[key])
+        response = await client.patch("http://localhost:7777/collections/openaerialmap/items/"+body.id, json=response)
+        if response.status_code != 200:
+            raise HTTPException(response.status_code)
+        return 200
 
-class DeleteEntryBody(BaseModel):
-    id: str
-    user: str
 @app.delete("/api/v1/deleteentry", tags=["Dashboard"])
-async def DeleteEntry(body: DeleteEntryBody, user=Depends(get_current_user)):
+async def DeleteEntry(id:str, user=Depends(get_current_user)):
     """
     Deletes the specified entry
-    TODO: NOT IMPLEMENTED
+    TODO: DELETE ASSOCIATED AWS S3 INFORMATION
     """
-    return {
-        "user": user["username"],
-        "id": body.id,
-        "message": "Dummy response"
-    }
+    async with httpx.AsyncClient() as client:
+        response = await client.get("http://localhost:7777/collections/openaerialmap/items/"+id)
+        if response.status_code != 200:
+            raise HTTPException(response.status_code)
+        if response.json()["properties"]["oam:uploaderid"] != user['sub']:
+            raise HTTPException(401)
+        response = await client.delete("http://localhost:7777/collections/openaerialmap/items/"+id)
+        if response.status_code != 200:
+            raise HTTPException(response.status_code)
+        return 200
+def slugify(text):
+    # 1. Replace spaces with nothing (per your original logic) or hyphens
+    # 2. Remove anything that isn't a word character (a-z, 0-9) or a hyphen/underscore
+    # 3. Optional: Lowercase it for consistency
+    safe_text = re.sub(r'[^a-zA-Z0-9_\-]', '', text.replace(" ", ""))
+    return safe_text
 
 # S3 Endpoints
 class createmultipartBody(BaseModel):
@@ -352,10 +418,10 @@ async def createmultipart(body: createmultipartBody, user=Depends(get_current_us
     Creates a multipart upload
     """
     userid = user["sub"]
-    key = userid+"/"+body.metadata["title"]+"/raw.tif"
+    key = userid+"/"+slugify(body.metadata["title"])+"/"+body.filename
     try:
         s3.head_object(Bucket=S3BUCKET, Key=key)
-        # raise HTTPException(400, "Dataset of the same title already exists!")
+        raise HTTPException(400, "Dataset of the same title already exists!")
     except botocore.exceptions.ClientError:
         pass
     response = s3.create_multipart_upload(
@@ -394,7 +460,7 @@ class completemultipartBody(BaseModel):
     uploadid: str
     parts: List[partSchema]
 @app.post("/api/v1/s3/completemultipart", tags=["AWS S3"])
-async def completemultipart(body: completemultipartBody, _=Depends(get_current_user)):
+async def completemultipart(body: completemultipartBody, user=Depends(get_current_user)):
     try:
         parts = [
             {
@@ -412,8 +478,11 @@ async def completemultipart(body: completemultipartBody, _=Depends(get_current_u
             }
         )
 
-        folder = "s3://"+S3BUCKET+"/"+body.key.replace("raw.tif", "")
-        print(invoke_processing(s3_path=folder))
+        path = body.key.split("/")
+        folder = path[:-1]
+        file = path[-1]
+        folder = "s3://"+S3BUCKET+"/"+"/".join(folder)+"/"
+        argo = invoke_processing(s3_path=folder, filename=file, key=body.key, userid=user['sub'])['metadata']['name']
         
     except botocore.exceptions.ClientError as err:
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
@@ -460,19 +529,19 @@ async def listparts(body: listpartsBody, _=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="No parts uploaded!")
 
 # Static files that should not require auth
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def home():
     return FileResponse("./static/index.html")
-@app.get("/styles.css")
+@app.get("/styles.css", include_in_schema=False)
 async def home():
     return FileResponse("./static/styles.css")
-@app.get("/scripting.js")
+@app.get("/scripting.js", include_in_schema=False)
 async def home():
     return FileResponse("./static/scripting.js")
 
 # STATIC FILES WHICH REQUIRES SESSION TOKEN
 STATIC = Path(__file__).parent / "static"
-@app.get("{full_path:path}")
+@app.get("{full_path:path}", include_in_schema=False)
 async def ServeHTML(full_path: str, session: str = Cookie(None)):
     """
     Serves static web files (HTML, CSS, etc.)
@@ -488,7 +557,6 @@ async def ServeHTML(full_path: str, session: str = Cookie(None)):
     else:
         full_path = "."+full_path+".html"
     file = STATIC / full_path
-    print(full_path)
     if file.exists():
         return FileResponse(file)
     else:

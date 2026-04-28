@@ -4,10 +4,17 @@ metadata:
   name: geotiff-processing-template
 spec:
   entrypoint: entry
+  onExit: exit-handler
   # Needs changes to be used with an authenticated s3, for now using local stuff
   arguments:
     parameters:
       - name: s3-path
+      - name: filename
+      - name: bucket
+      - name: key
+      - name: id
+      - name: uuid
+      - name: state
 
   # Volume claim for shared storage for pipeline steps
   volumeClaimTemplates:
@@ -17,7 +24,7 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: 25Gi
+            storage: 50Gi
 
   templates:
     # DAG for pipeline steps
@@ -31,10 +38,30 @@ spec:
             template: validate-geotiff
             continueOn:
               failed: true
+            hooks:
+              running:
+                expression: "true"
+                template: report-status
+                arguments:
+                  parameters:
+                    - name: step-id
+                      value: "validating"
+                    - name: message
+                      value: "Validating GeoTIFF integrity..."
           - name: convert-to-cog # Convert to cog
             dependencies: [validate]
             template: rio-cogeo-convert
             when: "{{tasks.validate.exitCode}} == 0"
+            hooks:
+              running:
+                expression: "true"
+                template: report-status
+                arguments:
+                  parameters:
+                    - name: step-id
+                      value: "converting"
+                    - name: message
+                      value: "Converting file to Cloud Optimized GeoTIFF (COG)..."
           - name: extract-metadata # Extract metadata
             dependencies: [validate]
             template: get-metadata
@@ -43,14 +70,38 @@ spec:
             dependencies: [convert-to-cog]
             template: s3-upload
             when: "{{tasks.validate.exitCode}} == 0 && {{tasks.convert-to-cog.exitCode}} == 0"
-          - name: stac # Upload metadata to pgSTAC
+            hooks:
+              running:
+                expression: "true"
+                template: report-status
+                arguments:
+                  parameters:
+                    - name: step-id
+                      value: "uploading"
+                    - name: message
+                      value: "Uploading final COG to S3 storage..."
+          - name: upload-meta # Upload metadata to aws
             dependencies: [extract-metadata]
-            template: stac-upload
+            template: meta-upload
             when: "{{tasks.validate.exitCode}} == 0 && {{tasks.extract-metadata.exitCode}} == 0"
-          - name: cleanup-on-failure
+          - name: register-stac # Upload metadata to aws
+            dependencies: [upload-meta, upload]
+            template: register-stac
+            when: "{{tasks.validate.exitCode}} == 0 && {{tasks.extract-metadata.exitCode}} == 0"
+          - name: cleanup-on-failure # Validation failed
             dependencies: [validate]
             template: cleanup
             when: "{{tasks.validate.exitCode}} == 5 || {{tasks.validate.exitCode}} == 6 || {{tasks.validate.exitCode}} == 7"
+    - name: exit-handler
+      steps:
+        - - name: call-report-api
+            template: report-status
+            arguments:
+              parameters:
+                - name: step-id
+                  value: "{{workflow.status}}"
+                - name: message
+                  value: "Processing finished."
             
     - name: s3-download
       container:
@@ -63,7 +114,11 @@ spec:
           - name: AWS_DEFAULT_REGION
             value: us-east-1
         command: [sh, -c]
-        args: ["aws --endpoint-url=http://host.docker.internal:4566 s3 cp {{workflow.parameters.s3-path}}raw.tif /data/input.tif"]
+        args:
+          - >
+            aws --endpoint-url=http://host.docker.internal:4566 s3 cp {{workflow.parameters.s3-path}}{{workflow.parameters.filename}} /data/input.tif &&
+            aws --endpoint-url=http://host.docker.internal:4566 s3api head-object --bucket {{workflow.parameters.bucket}}  --key {{workflow.parameters.key}} --query 'Metadata' > /data/meta.json
+
         volumeMounts:
           - name: workspace
             mountPath: /data
@@ -128,7 +183,12 @@ spec:
         command: [python, script.py]
         args: 
           - "/data/input.tif"
+          - "/data/meta.json"
           - "/data/"
+          - "{{workflow.parameters.id}}"
+          - "{{workflow.parameters.bucket}}/{{workflow.parameters.key}}"
+          - "http://localhost:4566/"
+          - "{{workflow.parameters.uuid}}"
         volumeMounts:
           - name: workspace
             mountPath: /data
@@ -149,7 +209,7 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog.tif
+            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog-{{workflow.parameters.filename}}
         volumeMounts:
           - name: workspace
             mountPath: /data
@@ -157,7 +217,7 @@ spec:
         limit: "3"
         retryPolicy: "OnFailure"
 
-    - name: stac-upload # Figure this out later...
+    - name: meta-upload
       container:
         image: amazon/aws-cli:latest
         env: # AWS Authentication
@@ -178,6 +238,24 @@ spec:
       retryStrategy:
         limit: "3"
         retryPolicy: "OnFailure"
+    
+    - name: register-stac
+      container:
+        image: stac:dev
+        imagePullPolicy: Never
+        env:
+          - name: STAC_URL
+            value: http://host.docker.internal:7777
+        command: [python, script.py]
+        args: 
+          - "/data/metadata.json"
+        volumeMounts:
+          - name: workspace
+            mountPath: /data
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "OnFailure"
+
 
     - name: cleanup
       container:
@@ -190,7 +268,35 @@ spec:
           - name: AWS_DEFAULT_REGION
             value: us-east-1
         command: [sh, -c]
-        args:
+        args: 
           - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 rm {{workflow.parameters.s3-path}} --recursive &&
+            aws --endpoint-url=http://host.docker.internal:4566 s3 rm {{workflow.parameters.s3-path}} --recursive;
+            curl -X POST http://host.docker.internal:12345/api/v1/workflowstatus \
+            -H "Content-Type: application/json" \
+            -H "X-Internal-Token: {{workflow.parameters.state}}" \
+            -d "{
+              \"id\": \"{{workflow.parameters.id}}\",
+              \"status\": \"Failed\",
+              \"message\": \"Invalid TIF format!\"
+            }";
+            
             exit 1
+
+    - name: report-status
+      inputs:
+        parameters:
+          - name: step-id
+          - name: message
+      container:
+        image: curlimages/curl:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            curl -X POST http://host.docker.internal:12345/api/v1/workflowstatus \
+            -H "Content-Type: application/json" \
+            -H "X-Internal-Token: {{workflow.parameters.state}}" \
+            -d "{
+              \"id\": \"{{workflow.parameters.id}}\",
+              \"status\": \"{{inputs.parameters.step-id}}\",
+              \"message\": \"{{inputs.parameters.message}}\"
+            }"
