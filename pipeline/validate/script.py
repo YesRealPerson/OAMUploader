@@ -3,6 +3,7 @@ Validate GeoTIFF
 """
 import sys
 import rasterio
+import traceback
 def validate_geotiff(path):
     with rasterio.open(path) as src:
         # The dataset’s coordinate reference system
@@ -19,4 +20,10 @@ def validate_geotiff(path):
     return True
 
 # C:\Users\Stephen\Desktop\OAMUploader\Repo\temporary\tester1\tester1.tif
-print(validate_geotiff(sys.argv[1]))
+if __name__ == "__main__":
+    try:
+        print(validate_geotiff(sys.argv[1]))
+    except Exception as e:
+        traceback.print_exc()
+        print(e)
+        sys.exit(1)

@@ -29,17 +29,24 @@ This uses the quick start commands which should be changed later.
 
 Build production containers (cd into the public directory)
 ```
-docker build -t oam-uploader-front:latest -f Dockerfile . 
+docker build -t oam-uploader-front:latest -f .\public\front.Dockerfile .
+docker build -t oam-uploader-stac:latest -f .\public\stac.Dockerfile .
 ```
+
+minikube image rm oam-uploader-front:latest
+minikube image load oam-uploader-front:latest
+minikube image rm oam-uploader-stac:latest
+minikube image load oam-uploader-stac:latest
 
 Apply deployment and service
 ```
-kubectl apply -f ./k8s/public.yaml
+kubectl apply -f .\k8s\front.yaml
+kubectl apply -f .\k8s\stac.yaml
 ```
 
 Port forward service
 ```
-kubectl port-forward svc/oam-front-service 12345:12345
+kubectl port-forward svc/oam-uploader-front 12345:12345
 ```
 
 Open the following in your browser
@@ -55,7 +62,7 @@ kubectl get services
 
 Delete all pods/services
 ```
-kubectl delete all --all     # kills all pods & services
+kubectl delete all --all
 ```
 
 View logs of pod

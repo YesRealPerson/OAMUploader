@@ -3,9 +3,17 @@ kind: WorkflowTemplate
 metadata:
   name: geotiff-processing-template
 spec:
+  ttlStrategy:
+    secondsAfterCompletion: 15
+    secondsAfterSuccess: 5
+  podGC:
+    strategy: OnPodCompletion
+  hostAliases:
+    - ip: "172.26.80.1"
+      hostnames:
+      - "aws"
   entrypoint: entry
   onExit: exit-handler
-  # Needs changes to be used with an authenticated s3, for now using local stuff
   arguments:
     parameters:
       - name: s3-path
@@ -16,28 +24,24 @@ spec:
       - name: uuid
       - name: state
 
-  # Volume claim for shared storage for pipeline steps
   volumeClaimTemplates:
     - metadata:
-        name: workspace
+        name: workspace-{{workflow.name}}
       spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: 50Gi
+            storage: 150Gi
 
   templates:
+    # ---------------------------------------------------------
     # DAG for pipeline steps
+    # ---------------------------------------------------------
     - name: entry
       dag:
         tasks:
-          - name: download # Download from s3
+          - name: download
             template: s3-download
-          - name: validate # Validate file
-            dependencies: [download]
-            template: validate-geotiff
-            continueOn:
-              failed: true
             hooks:
               running:
                 expression: "true"
@@ -45,13 +49,27 @@ spec:
                 arguments:
                   parameters:
                     - name: step-id
-                      value: "validating"
+                      value: "Downloading"
+                    - name: message
+                      value: "Downloading file from S3..."
+
+          - name: validate
+            depends: "download.Succeeded"
+            template: validate-geotiff
+            hooks:
+              running:
+                expression: "true"
+                template: report-status
+                arguments:
+                  parameters:
+                    - name: step-id
+                      value: "Validating"
                     - name: message
                       value: "Validating GeoTIFF integrity..."
-          - name: convert-to-cog # Convert to cog
-            dependencies: [validate]
+
+          - name: convert-to-cog
+            depends: "validate.Succeeded"
             template: rio-cogeo-convert
-            when: "{{tasks.validate.exitCode}} == 0"
             hooks:
               running:
                 expression: "true"
@@ -59,17 +77,17 @@ spec:
                 arguments:
                   parameters:
                     - name: step-id
-                      value: "converting"
+                      value: "Converting"
                     - name: message
                       value: "Converting file to Cloud Optimized GeoTIFF (COG)..."
-          - name: extract-metadata # Extract metadata
-            dependencies: [validate]
+
+          - name: extract-metadata
+            depends: "validate.Succeeded"
             template: get-metadata
-            when: "{{tasks.validate.exitCode}} == 0"
-          - name: upload # Upload cog to s3 
-            dependencies: [convert-to-cog]
+
+          - name: upload
+            depends: "convert-to-cog.Succeeded"
             template: s3-upload
-            when: "{{tasks.validate.exitCode}} == 0 && {{tasks.convert-to-cog.exitCode}} == 0"
             hooks:
               running:
                 expression: "true"
@@ -77,36 +95,68 @@ spec:
                 arguments:
                   parameters:
                     - name: step-id
-                      value: "uploading"
+                      value: "Uploading"
                     - name: message
                       value: "Uploading final COG to S3 storage..."
-          - name: upload-meta # Upload metadata to aws
-            dependencies: [extract-metadata]
+
+          - name: upload-meta
+            depends: "extract-metadata.Succeeded"
             template: meta-upload
-            when: "{{tasks.validate.exitCode}} == 0 && {{tasks.extract-metadata.exitCode}} == 0"
-          - name: register-stac # Upload metadata to aws
-            dependencies: [upload-meta, upload]
+
+          - name: register-stac
+            depends: "upload-meta.Succeeded && upload.Succeeded"
             template: register-stac
-            when: "{{tasks.validate.exitCode}} == 0 && {{tasks.extract-metadata.exitCode}} == 0"
-          - name: cleanup-on-failure # Validation failed
-            dependencies: [validate]
-            template: cleanup
+            hooks:
+              running:
+                expression: "true"
+                template: report-status
+                arguments:
+                  parameters:
+                    - name: step-id
+                      value: "Registering"
+                    - name: message
+                      value: "Registering COG with STAC catalog..."
+
+          - name: cleanup-on-failure
+            depends: "validate.Failed"
             when: "{{tasks.validate.exitCode}} == 5 || {{tasks.validate.exitCode}} == 6 || {{tasks.validate.exitCode}} == 7"
+            template: cleanup
+            arguments:
+              parameters:
+                - name: val-exit-code
+                  value: "{{tasks.validate.exitCode}}"
+
+    # ---------------------------------------------------------
+    # Global Exit Handler (Guarantees Terminal Status)
+    # ---------------------------------------------------------
     - name: exit-handler
       steps:
-        - - name: call-report-api
+        - - name: report-success
             template: report-status
+            when: "{{workflow.status}} == Succeeded"
             arguments:
               parameters:
                 - name: step-id
-                  value: "{{workflow.status}}"
+                  value: "Succeeded"
                 - name: message
-                  value: "Processing finished."
-            
+                  value: "Processing finished successfully."
+          - name: report-failure
+            template: report-status
+            when: "{{workflow.status}} != Succeeded"
+            arguments:
+              parameters:
+                - name: step-id
+                  value: "Failed"
+                - name: message
+                  value: "Workflow ended with a failure or was interrupted."
+
+    # ---------------------------------------------------------
+    # Container Templates
+    # ---------------------------------------------------------
     - name: s3-download
       container:
         image: amazon/aws-cli:latest
-        env: # AWS Authentication
+        env:
           - name: AWS_ACCESS_KEY_ID
             value: test
           - name: AWS_SECRET_ACCESS_KEY
@@ -116,11 +166,13 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 cp {{workflow.parameters.s3-path}}{{workflow.parameters.filename}} /data/input.tif &&
-            aws --endpoint-url=http://host.docker.internal:4566 s3api head-object --bucket {{workflow.parameters.bucket}}  --key {{workflow.parameters.key}} --query 'Metadata' > /data/meta.json
-
+            df -h /data &&
+            rm -rf /data/* &&
+            df -h /data &&
+            aws --endpoint-url=http://aws:4566 s3 cp {{workflow.parameters.s3-path}}{{workflow.parameters.filename}} /data/input.tif &&
+            aws --endpoint-url=http://aws:4566 s3api head-object --bucket {{workflow.parameters.bucket}}  --key {{workflow.parameters.key}} --query 'Metadata' > /data/meta.json
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
       retryStrategy:
         limit: "3"
@@ -128,41 +180,39 @@ spec:
 
     - name: validate-geotiff
       container:
-        image: validate:dev
+        image: validate:funny
         env:
           - name: GDAL_CACHEMAX
-            value: "1024"
+            value: "4096"
         resources:
           requests:
-            memory: "1Gi"
+            memory: "4Gi"
             cpu: "2"
           limits:
-            memory: "2Gi"
+            memory: "6Gi"
             cpu: "4"
         imagePullPolicy: Never
         command: [python, script.py]
         args: 
           - "/data/input.tif"
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
-      # retryStrategy:
-      #   limit: "3"
-      #   retryPolicy: "OnFailure"
-      #   expression: "lastNode.exitCode != 5 && lastNode.exitCode != 6 && lastNode.exitCode != 7"
 
     - name: rio-cogeo-convert
       container:
-        image: convert:dev
+        image: convert:v1
         env:
           - name: GDAL_CACHEMAX
-            value: "1024"
+            value: "4096"
+          - name: TMPDIR        # Force temp files onto the PVC
+            value: "/data/tmp"
         resources:
           requests:
-            memory: "2Gi"
+            memory: "8Gi"
             cpu: "2"
           limits:
-            memory: "4Gi"
+            memory: "12Gi"
             cpu: "4"
         imagePullPolicy: Never
         command: [python, script.py]
@@ -170,7 +220,7 @@ spec:
           - "/data/input.tif"
           - "/data/output.tif"
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
       retryStrategy:
         limit: "3"
@@ -178,7 +228,7 @@ spec:
 
     - name: get-metadata
       container:
-        image: metadata:dev
+        image: metadata:funny
         imagePullPolicy: Never
         command: [python, script.py]
         args: 
@@ -187,10 +237,10 @@ spec:
           - "/data/"
           - "{{workflow.parameters.id}}"
           - "{{workflow.parameters.bucket}}/{{workflow.parameters.key}}"
-          - "http://localhost:4566/"
+          - "{{workflow.parameters.externalaws}}"
           - "{{workflow.parameters.uuid}}"
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
       retryStrategy:
         limit: "3"
@@ -199,7 +249,7 @@ spec:
     - name: s3-upload
       container:
         image: amazon/aws-cli:latest
-        env: # AWS Authentication
+        env:
           - name: AWS_ACCESS_KEY_ID
             value: test
           - name: AWS_SECRET_ACCESS_KEY
@@ -209,9 +259,9 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog-{{workflow.parameters.filename}}
+            aws --endpoint-url=http://aws:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog-{{workflow.parameters.filename}}
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
       retryStrategy:
         limit: "3"
@@ -220,7 +270,7 @@ spec:
     - name: meta-upload
       container:
         image: amazon/aws-cli:latest
-        env: # AWS Authentication
+        env:
           - name: AWS_ACCESS_KEY_ID
             value: test
           - name: AWS_SECRET_ACCESS_KEY
@@ -230,10 +280,10 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/metadata.json {{workflow.parameters.s3-path}}metadata.json &&
-            aws --endpoint-url=http://host.docker.internal:4566 s3 cp /data/thumbnail.png {{workflow.parameters.s3-path}}thumbnail.png
+            aws --endpoint-url=http://aws:4566 s3 cp /data/metadata.json {{workflow.parameters.s3-path}}metadata.json &&
+            aws --endpoint-url=http://aws:4566 s3 cp /data/thumbnail.png {{workflow.parameters.s3-path}}thumbnail.png
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
       retryStrategy:
         limit: "3"
@@ -241,26 +291,31 @@ spec:
     
     - name: register-stac
       container:
-        image: stac:dev
+        image: stac:funny
         imagePullPolicy: Never
         env:
           - name: STAC_URL
-            value: http://host.docker.internal:7777
+            value: http://stac-api.default.svc.cluster.local:8082
         command: [python, script.py]
         args: 
           - "/data/metadata.json"
         volumeMounts:
-          - name: workspace
+          - name: workspace-{{workflow.name}}
             mountPath: /data
       retryStrategy:
         limit: "3"
         retryPolicy: "OnFailure"
 
-
+    # ---------------------------------------------------------
+    # Utilities
+    # ---------------------------------------------------------
     - name: cleanup
+      inputs:
+        parameters:
+          - name: val-exit-code
       container:
         image: amazon/aws-cli:latest
-        env: # AWS Authentication
+        env:
           - name: AWS_ACCESS_KEY_ID
             value: test
           - name: AWS_SECRET_ACCESS_KEY
@@ -269,17 +324,36 @@ spec:
             value: us-east-1
         command: [sh, -c]
         args: 
-          - >
-            aws --endpoint-url=http://host.docker.internal:4566 s3 rm {{workflow.parameters.s3-path}} --recursive;
-            curl -X POST http://host.docker.internal:12345/api/v1/workflowstatus \
+          - |
+            # 1. Recursive S3 Deletion
+            echo "Cleaning up S3 path: {{workflow.parameters.s3-path}}"
+            aws --endpoint-url=http://aws:4566 s3 rm {{workflow.parameters.s3-path}} --recursive
+            
+            # 2. Determine the specific error message
+            CODE="{{inputs.parameters.val-exit-code}}"
+            MSG="Validation failed due to an unknown error."
+            
+            if [ "$CODE" = "5" ]; then MSG="TIF is invalid (not georeferenced)!"; fi
+            if [ "$CODE" = "6" ]; then MSG="TIF is invalid (too many bands, only < 3 accepted)!"; fi
+            if [ "$CODE" = "7" ]; then MSG="TIF is invalid (bit depth must be 8 bits)!"; fi
+            
+            # 3. Write JSON to a temporary file to avoid quoting/shell hell
+            # We use a heredoc to build the JSON safely
+            cat <<EOF > /tmp/payload.json
+            {
+              "id": "{{workflow.parameters.id}}",
+              "status": "Failed",
+              "message": "$MSG"
+            }
+            EOF
+            
+            # 4. POST the file content
+            curl -X POST http://front-api.default.svc.cluster.local:12345/api/v1/workflowstatus \
             -H "Content-Type: application/json" \
             -H "X-Internal-Token: {{workflow.parameters.state}}" \
-            -d "{
-              \"id\": \"{{workflow.parameters.id}}\",
-              \"status\": \"Failed\",
-              \"message\": \"Invalid TIF format!\"
-            }";
+            -d @/tmp/payload.json
             
+            # 5. Ensure the pod exits with a failure code so Argo knows it failed
             exit 1
 
     - name: report-status
@@ -292,7 +366,7 @@ spec:
         command: ["sh", "-c"]
         args:
           - |
-            curl -X POST http://host.docker.internal:12345/api/v1/workflowstatus \
+            curl -X POST http://front-api.default.svc.cluster.local:12345/api/v1/workflowstatus \
             -H "Content-Type: application/json" \
             -H "X-Internal-Token: {{workflow.parameters.state}}" \
             -d "{

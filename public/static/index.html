@@ -50,7 +50,7 @@
 		let response = await (await fetch("/api/v1/getuser")).json()
 		console.log(response)
 		if(response.status == 0){
-			document.getElementById("status").innerText = "Not logged in!"
+			document.getElementById("status").innerHTML = "<a href=\"/api/v1/login\" id=\"status\">Please Log In!</a>"
 		}else{
 			document.getElementById("status").innerText = `Hello, ${response.user}!`
 		}
@@ -70,12 +70,6 @@
 </header>
 <body>
     <h1>Home</h1>
-	<div style="height: 50vh; display: flex; align-items: center;">
-		<div style="width: 100%;text-align: center;">
-			<h2>Hello!</h2>
-      <!-- <hotosm-auth hanko-url="https://dev.login.hotosm.org" osm-required redirect-after-login="/"></hotosm-auth> -->
-			<a href="/api/v1/login" id="status">Login with OpenStreetMap</a>
-		</div>
-	</div>
+    <iframe src="http://localhost:8080" style="width: 100%; height: 85vh;"></iframe>
 </body>
 </html>

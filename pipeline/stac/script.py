@@ -1,5 +1,7 @@
 import json, os, sys, urllib.request, urllib.error
 import os
+import sys
+import traceback
 
 
 def post(url, data):
@@ -21,5 +23,11 @@ def register_stac(filename:str):
           props["datetime"] = None
     post(os.environ.get("STAC_URL", "http://localhost:7777")+"/collections/"+os.environ.get("STAC_COLLECTION", "openaerialmap")+"/items", meta)
 
-register_stac(sys.argv[1])
+if __name__ == "__main__":
+    try:
+        register_stac(sys.argv[1])
+    except Exception as e:
+        traceback.print_exc()
+        print(e)
+        sys.exit(1)
 # py ./script.py C:\Users\Stephen\Desktop\OAMUploader\Repo\temporary\tester1\metadata.json

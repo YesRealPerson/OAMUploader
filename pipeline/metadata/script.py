@@ -8,6 +8,7 @@ import os
 import sys
 import json
 from datetime import datetime, timezone
+import traceback
 import rasterio
 from rasterio.enums import Resampling
 from pystac import Item, Asset, MediaType
@@ -118,5 +119,10 @@ def extract_metadata(tiff_path, meta_path, out_dir, item_id, s3_path, baseurl, u
 
 if __name__ == "__main__":
     # Usage: python script.py <path_to_tiff> <output_dir> <item_id>
-    extract_metadata(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7])
+    try:
+        extract_metadata(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7])
+    except Exception as e:
+        traceback.print_exc()
+        print(e)
+        sys.exit(1)
     # py .\script.py C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1\\tester1.tif C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1\\meta.json C:\\Users\\Stephen\\Desktop\\OAMUploader\\Repo\\temporary\\tester1 iojsdajsd testbucket/23871929/asdasdasdad/tester1.tif http://localhost:4566
