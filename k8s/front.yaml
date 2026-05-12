@@ -1,0 +1,99 @@
+# 1. The Identity for your Pod
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: front-api-sa
+  namespace: default
+
+---
+# 2. Permissions (Upgrade to ClusterRole)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workflow-manager-global
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "workflowtemplates"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+---
+# 3. Link (Upgrade to ClusterRoleBinding)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: front-api-global-binding
+subjects:
+  - kind: ServiceAccount
+    name: front-api-sa
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: workflow-manager-global
+  apiGroup: rbac.authorization.k8s.io
+---
+# 4. The actual Container
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: front-api
+  template:
+    metadata:
+      labels:
+        app: front-api
+    spec:
+      serviceAccountName: front-api-sa # This is the "ID card" we created above
+      hostAliases:
+      - ip: "172.26.80.1"
+        hostnames:
+        - "aws"
+      containers:
+      - name: front
+        image: oam-uploader-front:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 12345
+        env:
+          - name: STAC_URL
+            value: "http://stac-api:8082" # Internal K8s service name
+          - name: AWS_ACCESS_KEY_ID
+            value: "test"
+          - name: AWS_SECRET_ACCESS_KEY
+            value: "test"
+          - name: AWS_ENDPOINT_URL
+            value: "http://aws:4566"
+          - name: AWS_ENDPOINT_URL_S3
+            value: "http://aws:4566"
+          - name: EXTERNAL_S3_ENDPOINT
+            value: "http://localhost:4566" # External (Browser to Host)
+          - name: BUCKET_NAME
+            value: "testbucket"
+          - name: AWS_REGION
+            value: us-east-1
+          - name: JWT_SECRET
+            value: 6e852e69585847d8acaefdf40e8b9dea847b7efb4c0b461cd53c69d6c9f2c3f8
+          - name: PRODUCTION
+            value: "true"
+          - name: OSM_CLIENT_ID
+            value: x8Wt4jUQP1FWdbzlnrngsg80eaQRgv_OC3uZEUtjdhQ
+          - name: OSM_CLIENT_SECRET
+            value: IDvz55p2D4o15VRuR92Mfj8yM1K8-FQxjV5kl32shyg
+          - name: REDIRECT_URI
+            value: http://127.0.0.1:12345/api/v1/authorize
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: front-api
+  namespace: default
+spec:
+  selector:
+    app: front-api
+  ports:
+    - protocol: TCP
+      port: 12345
+      targetPort: 12345
