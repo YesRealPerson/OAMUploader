@@ -34,9 +34,6 @@ spec:
             storage: 150Gi
 
   templates:
-    # ---------------------------------------------------------
-    # DAG for pipeline steps
-    # ---------------------------------------------------------
     - name: entry
       dag:
         tasks:
@@ -125,10 +122,6 @@ spec:
               parameters:
                 - name: val-exit-code
                   value: "{{tasks.validate.exitCode}}"
-
-    # ---------------------------------------------------------
-    # Global Exit Handler (Guarantees Terminal Status)
-    # ---------------------------------------------------------
     - name: exit-handler
       steps:
         - - name: report-success
@@ -150,9 +143,6 @@ spec:
                 - name: message
                   value: "Workflow ended with a failure or was interrupted."
 
-    # ---------------------------------------------------------
-    # Container Templates
-    # ---------------------------------------------------------
     - name: s3-download
       container:
         image: amazon/aws-cli:latest
@@ -205,7 +195,7 @@ spec:
         env:
           - name: GDAL_CACHEMAX
             value: "4096"
-          - name: TMPDIR        # Force temp files onto the PVC
+          - name: TMPDIR
             value: "/data/tmp"
         resources:
           requests:
@@ -305,10 +295,6 @@ spec:
       retryStrategy:
         limit: "3"
         retryPolicy: "OnFailure"
-
-    # ---------------------------------------------------------
-    # Utilities
-    # ---------------------------------------------------------
     - name: cleanup
       inputs:
         parameters:
@@ -325,6 +311,7 @@ spec:
         command: [sh, -c]
         args: 
           - |
+            # Generated with LLM
             # 1. Recursive S3 Deletion
             echo "Cleaning up S3 path: {{workflow.parameters.s3-path}}"
             aws --endpoint-url=http://aws:4566 s3 rm {{workflow.parameters.s3-path}} --recursive

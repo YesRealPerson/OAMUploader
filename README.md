@@ -42,6 +42,7 @@ Apply deployment and service
 ```
 kubectl apply -f .\k8s\front.yaml
 kubectl apply -f .\k8s\stac.yaml
+kubectl apply -f .\k8s\keys.yaml 
 ```
 
 Port forward service
