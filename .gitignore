@@ -3,3 +3,4 @@ pyvenv.cfg
 Scripts/*
 __pycache__
 Lib/*
+temporary/*

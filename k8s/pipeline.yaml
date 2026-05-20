@@ -4,14 +4,12 @@ metadata:
   name: geotiff-processing-template
 spec:
   ttlStrategy:
-    secondsAfterCompletion: 15
-    secondsAfterSuccess: 5
+    secondsAfterCompletion: 600
+    secondsAfterSuccess: 15
   podGC:
     strategy: OnPodCompletion
-  hostAliases:
-    - ip: "172.26.80.1"
-      hostnames:
-      - "aws"
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
   entrypoint: entry
   onExit: exit-handler
   arguments:
@@ -23,6 +21,9 @@ spec:
       - name: id
       - name: uuid
       - name: state
+      - name: stacurl
+      - name: awsurl
+      - name: fronturl
 
   volumeClaimTemplates:
     - metadata:
@@ -31,7 +32,7 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: 150Gi
+            storage: 60Gi # Seems to be just enough for a 5gb file
 
   templates:
     - name: entry
@@ -60,9 +61,9 @@ spec:
                 arguments:
                   parameters:
                     - name: step-id
-                      value: "Validating"
+                      value: "Validation"
                     - name: message
-                      value: "Validating GeoTIFF integrity..."
+                      value: "Validated GeoTIFF integrity"
 
           - name: convert-to-cog
             depends: "validate.Succeeded"
@@ -159,8 +160,8 @@ spec:
             df -h /data &&
             rm -rf /data/* &&
             df -h /data &&
-            aws --endpoint-url=http://aws:4566 s3 cp {{workflow.parameters.s3-path}}{{workflow.parameters.filename}} /data/input.tif &&
-            aws --endpoint-url=http://aws:4566 s3api head-object --bucket {{workflow.parameters.bucket}}  --key {{workflow.parameters.key}} --query 'Metadata' > /data/meta.json
+            aws --endpoint-url={{workflow.parameters.awsurl}} s3 cp {{workflow.parameters.s3-path}}{{workflow.parameters.filename}} /data/input.tif &&
+            aws --endpoint-url={{workflow.parameters.awsurl}} s3api head-object --bucket {{workflow.parameters.bucket}}  --key {{workflow.parameters.key}} --query 'Metadata' > /data/meta.json
         volumeMounts:
           - name: workspace-{{workflow.name}}
             mountPath: /data
@@ -170,7 +171,7 @@ spec:
 
     - name: validate-geotiff
       container:
-        image: validate:funny
+        image: validate:v1
         env:
           - name: GDAL_CACHEMAX
             value: "4096"
@@ -205,10 +206,14 @@ spec:
             memory: "12Gi"
             cpu: "4"
         imagePullPolicy: Never
-        command: [python, script.py]
-        args: 
-          - "/data/input.tif"
-          - "/data/output.tif"
+        command: [sh, -c]
+        args:
+          - |
+            mkdir -p /data/tmp
+            df -h /data
+            du -h -d 1 /data || true
+            python script.py /data/input.tif /data/output.tif
+            df -h /data
         volumeMounts:
           - name: workspace-{{workflow.name}}
             mountPath: /data
@@ -218,7 +223,7 @@ spec:
 
     - name: get-metadata
       container:
-        image: metadata:funny
+        image: metadata:v1
         imagePullPolicy: Never
         command: [python, script.py]
         args: 
@@ -249,7 +254,9 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://aws:4566 s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog-{{workflow.parameters.filename}}
+            aws --endpoint-url={{workflow.parameters.awsurl}} s3 cp /data/output.tif {{workflow.parameters.s3-path}}cog-{{workflow.parameters.filename}} &
+            rm -f /data/input.tif /data/output.tif &&
+            rm -rf /data/tmp/*
         volumeMounts:
           - name: workspace-{{workflow.name}}
             mountPath: /data
@@ -270,8 +277,8 @@ spec:
         command: [sh, -c]
         args:
           - >
-            aws --endpoint-url=http://aws:4566 s3 cp /data/metadata.json {{workflow.parameters.s3-path}}metadata.json &&
-            aws --endpoint-url=http://aws:4566 s3 cp /data/thumbnail.png {{workflow.parameters.s3-path}}thumbnail.png
+            aws --endpoint-url={{workflow.parameters.awsurl}} s3 cp /data/metadata.json {{workflow.parameters.s3-path}}metadata.json &&
+            aws --endpoint-url={{workflow.parameters.awsurl}} s3 cp /data/thumbnail.png {{workflow.parameters.s3-path}}thumbnail.png
         volumeMounts:
           - name: workspace-{{workflow.name}}
             mountPath: /data
@@ -281,11 +288,11 @@ spec:
     
     - name: register-stac
       container:
-        image: stac:funny
+        image: stac:v1
         imagePullPolicy: Never
         env:
           - name: STAC_URL
-            value: http://stac-api.default.svc.cluster.local:8082
+            value: "{{workflow.parameters.stacurl}}"
         command: [python, script.py]
         args: 
           - "/data/metadata.json"
@@ -314,7 +321,7 @@ spec:
             # Generated with LLM
             # 1. Recursive S3 Deletion
             echo "Cleaning up S3 path: {{workflow.parameters.s3-path}}"
-            aws --endpoint-url=http://aws:4566 s3 rm {{workflow.parameters.s3-path}} --recursive
+            aws --endpoint-url={{workflow.parameters.awsurl}} s3 rm {{workflow.parameters.s3-path}} --recursive
             
             # 2. Determine the specific error message
             CODE="{{inputs.parameters.val-exit-code}}"
@@ -335,7 +342,7 @@ spec:
             EOF
             
             # 4. POST the file content
-            curl -X POST http://front-api.default.svc.cluster.local:12345/api/v1/workflowstatus \
+            curl -X POST {{workflow.parameters.fronturl}}/api/v1/workflowstatus \
             -H "Content-Type: application/json" \
             -H "X-Internal-Token: {{workflow.parameters.state}}" \
             -d @/tmp/payload.json
@@ -353,7 +360,7 @@ spec:
         command: ["sh", "-c"]
         args:
           - |
-            curl -X POST http://front-api.default.svc.cluster.local:12345/api/v1/workflowstatus \
+            curl -X POST {{workflow.parameters.fronturl}}/api/v1/workflowstatus \
             -H "Content-Type: application/json" \
             -H "X-Internal-Token: {{workflow.parameters.state}}" \
             -d "{

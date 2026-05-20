@@ -19,19 +19,40 @@ from kubernetes import client, config
 import uuid
 import re
 
-# Kubernetes Configuration
-# Use load_incluster_config() if running inside K8s, 
-# or load_kube_config() for local development.
-try:
-    config.load_incluster_config()
-except config.ConfigException:
-    config.load_kube_config()
-
-k8s_api = client.CustomObjectsApi()
+# Environment configuration
 
 if(not os.getenv("PRODUCTION")):
     load_dotenv()
+CLIENT_ID = os.environ.get("OSM_CLIENT_ID", "test")
+CLIENT_SECRET = os.environ.get("OSM_CLIENT_SECRET", "test")
+REDIRECT_URI = os.environ.get("REDIRECT_URI", "test")
+AUTHORIZE_URL = os.environ.get("AUTHORIZE_URL", "test")
+TOKEN_URL = os.environ.get("TOKEN_URL", "test")
+STAC_URL = os.environ.get("STAC_URL", "http://stac-api:8082")
+WF_FRONT_URL = os.environ.get("WF_FRONT_URL", "http://front-api.default.svc.cluster.local:12345")
+WF_AWS_URL = os.environ.get("WF_AWS_URL", "http://local:4566")
+WF_STAC_URL = os.environ.get("WF_STAC_URL", "http://stac-api.default.svc.cluster.local:8082")
+# TODO: Depreciate old authentication system
+JWT_SECRET = os.environ.get("JWT_SECRET")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_HOURS = 1
+REFRESH_TOKEN_DAYS = 30
 
+"""
+Kubernetes API setup
+"""
+try:
+    config.load_incluster_config() # In cluster testing/production
+except config.ConfigException:
+    config.load_kube_config() # FastAPI testing
+k8s_api = client.CustomObjectsApi()
+
+
+"""
+Amazon s3 session
+"""
+session = boto3.Session()
+s3 = boto3.client('s3', region_name=os.environ.get("AWS_REGION", "us-east-1"))
 S3BUCKET = os.getenv("BUCKET_NAME")
 cors_configuration = {
     'CORSRules': [
@@ -43,10 +64,6 @@ cors_configuration = {
     "MaxAgeSeconds": 3000
   }
 ]}
-
-# Amazon s3 session
-session = boto3.Session()
-s3 = boto3.client('s3', region_name=os.environ.get("AWS_REGION", "us-east-1"))
 if(len(s3.list_buckets()["Buckets"]) == 0):
     print("Zero buckets!")
     if(os.getenv("AWS_ACCESS_KEY_ID") == "test"): # If we're in the testing environment we want to setup the bucket and cors policy 
@@ -57,54 +74,38 @@ if(len(s3.list_buckets()["Buckets"]) == 0):
         )
     else:
         raise ValueError("AWS S3 has zero buckets!")
-
 buckets = [x['Name'] for x in s3.list_buckets()['Buckets']]
-
 print("Buckets: ", buckets)
 if(not S3BUCKET in buckets):
     raise ValueError(S3BUCKET+" does not exist on AWS S3!")
 
-
+"""
+FastAPI Setup
+"""
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # TODO: Setup HOTOSM auth
     # auth_config = AuthConfig.from_env()
     # init_auth(auth_config)
     yield
-# FastAPI setup
+# app.include_router(osm_router, prefix="/api/auth/osm")
+
 app = FastAPI(
     title="OAM Uploader API Reference",
     description="""
 [Home](/)
 [Dashboard](/dashboard)
-[Uploader](/upload)
-""",
+[Uploader](/upload)""", # Links back to homepage on API docs page
 lifespan=lifespan
 )
 
-# app.include_router(osm_router, prefix="/api/auth/osm")
-
-CLIENT_ID = os.environ.get("OSM_CLIENT_ID", "test")
-CLIENT_SECRET = os.environ.get("OSM_CLIENT_SECRET", "test")
-REDIRECT_URI = os.environ.get("REDIRECT_URI", "test")
-AUTHORIZE_URL = "https://www.openstreetmap.org/oauth2/authorize"
-TOKEN_URL = "https://www.openstreetmap.org/oauth2/token"
-
-JWT_SECRET = os.environ.get("JWT_SECRET")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = 1
-REFRESH_TOKEN_DAYS = 30
 
 """
-Notes section:
-TODO: DELETE ME LATER :)
-TODO: Combine repeated body types when all finalized.
-TODO: Add checking for the current user, currently the API is very insecure and will just let users interact with S3, NOT GOOD.
-TODO: Specify response schemas when everything is finalized
-TODO: Link to actual database for user storage
+Voltile data structures for storing server states
+
+NOTE: Some of these will be migrated to a formal database later. AWS KV store seems like an easy integration.
 """
-
-
-# Helpers
+# Potentially useless schemas for later
 class User(BaseModel):
     username: str
     user_id: str
@@ -118,11 +119,17 @@ class Upload(BaseModel):
     userid: str
     filename: str
 
-userdb:dict[str, User] = {} # Poor mans database for user refresh tokens, TODO: Update to be pgsql or similar
+userdb:dict[str, User] = {} # Poor mans database for user refresh tokens
 uploaddb:dict[str, Upload] = {} # Poor mans database for in progress uploads
-usertoupload:dict[str,set[str]] = {}
-validStates = set()
+usertoupload:dict[str,set[str]] = {} # User IDs > Upload IDs
+validStates = set() # Set of valid ongoing uploads
 
+
+"""
+Authentication helper functions
+
+NOTE: These will be depreciated upon successful implementation of HOTOSM Auth
+"""
 def create_session_token(user_id: str, username: str):
     """
     Creates a JWT session token
@@ -144,30 +151,53 @@ def create_session_token(user_id: str, username: str):
     return token
 def create_refresh_token():
     return secrets.token_urlsafe(64)
+def get_current_user_helper(session):
+    payload = jwt.decode(session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    usertoupload[payload['sub']] # Triggers keyerror if user not in database
+    return payload
 def get_current_user(session: str = Cookie(None)):
     if not session:
         raise HTTPException(status_code=401, detail="Not logged in")
-
     try:
-        payload = jwt.decode(session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
+        return get_current_user_helper(session)
     except JWTError as e:
-        print(e)
         raise HTTPException(status_code=401, detail="Invalid session")
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Expired session")
+    except KeyError:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+"""
+Random Helpers
+"""
+def slugify(text):
+    # 1. Replace spaces with nothing (per your original logic) or hyphens
+    # 2. Remove anything that isn't a word character (a-z, 0-9) or a hyphen/underscore
+    # 3. Optional: Lowercase it for consistency
+    # generated by GPT
+    safe_text = re.sub(r'[^a-zA-Z0-9_\-]', '', text.replace(" ", ""))
+    return safe_text
+
+"""
+Internal interaction functions
+
+TODO: Add endpoint for user to kill processing
+"""
 def invoke_processing(s3_path: str, filename:str, key:str, userid: str):
+    """
+    Schedules an Argo Workflows event to process an uploaded TIF file
+    """
     uploadid = str(uuid.uuid4())
     state = str(uuid.uuid4())
     manifest = {
         "apiVersion": "argoproj.io/v1alpha1",
         "kind": "Workflow",
         "metadata": {
-            "generateName": "geotiff-run-" # The instance name
+            "generateName": "geotiff-run-"
         },
         "spec": {
             "workflowTemplateRef": {
-                "name": "geotiff-processing-template" # Matches the name in template.yaml
+                "name": "geotiff-processing-template"
             },
             "arguments": {
                 "parameters": [
@@ -178,7 +208,10 @@ def invoke_processing(s3_path: str, filename:str, key:str, userid: str):
                     {"name": "id", "value": uploadid},
                     {"name": "uuid", "value": userid},
                     {"name": "state", "value": state},
-                    {"name": "externalaws", "value": os.getenv("EXTERNAL_S3_ENDPOINT", "http://localhost:4566")}
+                    {"name": "externalaws", "value": os.getenv("EXTERNAL_S3_ENDPOINT", "http://localhost:4566")},
+                    {"name": "stacurl", "value": WF_STAC_URL},
+                    {"name": "awsurl", "value": WF_AWS_URL},
+                    {"name": "fronturl", "value": WF_FRONT_URL},
                 ]
             }
         }
@@ -200,30 +233,69 @@ class WorkflowStatusUpdate(BaseModel):
     message: str=""
 @app.post("/api/v1/workflowstatus", include_in_schema=False)
 async def callback(body: WorkflowStatusUpdate, request: Request):
+    """
+    Workflows attempts to call this endpoint to update the state of a given upload
+    Requires that the workflow pass a valid state
+
+    TODO: If the workflow passes an invalid state kill the workflow
+    """
     token = request.headers.get("X-Internal-Token")
     if(token not in validStates or body.id not in uploaddb.keys()):
         raise HTTPException(401)
     uploaddb[body.id].status = body.status
     uploaddb[body.id].message = body.message
-    print(body.id,body.status,body.message)
     if(body.status == "Succeeded" or body.status == "Failed" or body.status == "Error"):
         validStates.remove(token)
         if not body.status == "Failed":
             usertoupload[uploaddb[body.id].userid].remove(body.id)
     return {"ok": True}
 
-# Authentication endpoints
+@app.delete("/api/v1/deleteupload", tags=["Dashboard"])
+async def DeleteUpload(id: str, user=Depends(get_current_user)):
+    """
+    Deletes a failed upload from the user's upload list.
+    """
+    if id not in uploaddb:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    upload = uploaddb[id]
+
+    if upload.userid != user["sub"]:
+        raise HTTPException(status_code=401)
+
+    if upload.status not in {"Failed", "Error"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed uploads can be deleted from the upload list"
+        )
+    print(upload.status)
+    # validStates.discard(upload.state)
+    # usertoupload.get(user["sub"], set()).discard(id)
+    # del uploaddb[id]
+
+    return {"ok": True}
+
+
+"""
+Authentication endpoints
+
+NOTE: These will be depreciated upon successful implementation of HOTOSM Auth
+"""
 @app.get("/api/v1/login", tags=["redirects"])
 async def osmlogin():
+    """Generate OSM login URL"""
     state = secrets.token_urlsafe(32)
     url = f"{AUTHORIZE_URL}?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state={state}&scope=openid read_prefs"
     response = RedirectResponse(url)
     response.set_cookie("oauth_state", state, httponly=True, samesite="lax")
     return response
-
-
 @app.post("/api/v1/refresh", tags=["authentication"])
 async def refreshsession(refresh: str = Cookie(None)):
+    """
+    Attempt to refresh session token
+    
+    NOTE: Broken lmao
+    """
     if not refresh:
         raise HTTPException(status_code=401)
     try:
@@ -260,6 +332,9 @@ async def refreshsession(refresh: str = Cookie(None)):
 
 @app.get("/api/v1/authorize", tags=["authentication"])
 async def authenticate(code: str, state: str, oauth_state: str = Cookie(None)):
+    """
+    Attempt to authenticate with OSM and store user information if successful.
+    """
     if state != oauth_state:
         raise HTTPException(status_code=400, detail="OAuth state mismatch")
     # Get tokens
@@ -319,6 +394,7 @@ async def authenticate(code: str, state: str, oauth_state: str = Cookie(None)):
 
 @app.get("/api/v1/getuser", include_in_schema=False)
 async def GetUser(session: str = Cookie(None)):
+    """Attempts to get the currently logged in user"""
     try:
         user = get_current_user(session)
         return {
@@ -331,7 +407,11 @@ async def GetUser(session: str = Cookie(None)):
             'user': "None"
         }
 
-# Dashboard Endpoints
+"""
+Dashboard endpoints
+
+Endpoints called by the dashboard
+"""
 @app.get("/api/v1/getEntries", tags=["Dashboard"])
 async def GetEntries(count:int=50, user=Depends(get_current_user)):
     """
@@ -339,7 +419,7 @@ async def GetEntries(count:int=50, user=Depends(get_current_user)):
     """
     async with httpx.AsyncClient() as client:
         # Search for items across collections, limited by the requested count 
-        response = await client.get("http://stac-api:8082/search", 
+        response = await client.get(STAC_URL+"/search", 
             params={
                 "limit": count,
                 "query": '{"properties.oam:uploaderid": {"eq": "'+user['sub']+'"}}'
@@ -356,7 +436,6 @@ async def GetEntries(count:int=50, user=Depends(get_current_user)):
 class EditEntryBody(BaseModel):
     id: str
     edits: Dict[str, str]
-
 @app.patch("/api/v1/editEntry", tags=["Dashboard"])
 async def EditEntry(body: EditEntryBody, user=Depends(get_current_user)):
     """
@@ -370,7 +449,7 @@ async def EditEntry(body: EditEntryBody, user=Depends(get_current_user)):
         'contact': lambda x: x
     }
     async with httpx.AsyncClient() as client:
-        response = await client.get("http://stac-api:8082/collections/openaerialmap/items/"+body.id)
+        response = await client.get(STAC_URL+"/collections/openaerialmap/items/"+body.id)
         if response.status_code != 200:
             raise HTTPException(response.status_code)
         response = response.json()
@@ -379,7 +458,7 @@ async def EditEntry(body: EditEntryBody, user=Depends(get_current_user)):
         for key in body.edits.keys():
             if key in valid and valid[key](body.edits[key]):
                 response["properties"][key] = valid[key](body.edits[key])
-        response = await client.patch("http://stac-api:8082/collections/openaerialmap/items/"+body.id, json=response)
+        response = await client.patch(STAC_URL+"/collections/openaerialmap/items/"+body.id, json=response)
         if response.status_code != 200:
             raise HTTPException(response.status_code)
         return 200
@@ -391,23 +470,19 @@ async def DeleteEntry(id:str, user=Depends(get_current_user)):
     TODO: DELETE ASSOCIATED AWS S3 INFORMATION
     """
     async with httpx.AsyncClient() as client:
-        response = await client.get("http://stac-api:8082/collections/openaerialmap/items/"+id)
+        response = await client.get(STAC_URL+"/collections/openaerialmap/items/"+id)
         if response.status_code != 200:
             raise HTTPException(response.status_code)
         if response.json()["properties"]["oam:uploaderid"] != user['sub']:
             raise HTTPException(401)
-        response = await client.delete("http://stac-api:8082/collections/openaerialmap/items/"+id)
+        response = await client.delete(STAC_URL+"/collections/openaerialmap/items/"+id)
         if response.status_code != 200:
             raise HTTPException(response.status_code)
         return 200
-def slugify(text):
-    # 1. Replace spaces with nothing (per your original logic) or hyphens
-    # 2. Remove anything that isn't a word character (a-z, 0-9) or a hyphen/underscore
-    # 3. Optional: Lowercase it for consistency
-    safe_text = re.sub(r'[^a-zA-Z0-9_\-]', '', text.replace(" ", ""))
-    return safe_text
 
-# S3 Endpoints
+"""
+AWS S3 Endpoints
+"""
 class createmultipartBody(BaseModel):
     filename: str
     metadata: Dict[str, str]
@@ -527,42 +602,37 @@ async def listparts(body: listpartsBody, _=Depends(get_current_user)):
     Returns the parts of a multipartupload that have already been uploaded
     """
     try:
-        return s3.list_parts(Bucket=S3BUCKET, Key=body.key, UploadId=body.uploadid)["Parts"]
+        return s3.list_parts(Bucket=S3BUCKET, Key=body.key, UploadId=body.uploadid).get("Parts", [])
     except botocore.exceptions.ClientError as err:
         raise HTTPException(status_code=400, detail=err.response['Error']['Message'])
     except KeyError as err: # The parts key will not exist if no parts have been uploaded
         raise HTTPException(status_code=400, detail="No parts uploaded!")
 
-# Static files that should not require auth
-@app.get("/", include_in_schema=False)
-async def home():
-    return FileResponse("./static/index.html")
-@app.get("/styles.css", include_in_schema=False)
-async def home():
-    return FileResponse("./static/styles.css")
-@app.get("/scripting.js", include_in_schema=False)
-async def home():
-    return FileResponse("./static/scripting.js")
-
-# STATIC FILES WHICH REQUIRES SESSION TOKEN
-STATIC = Path(__file__).parent / "static"
+"""
+Static file serving
+"""
+STATICP = Path(__file__).parent / "static/public"
+STATICA = Path(__file__).parent / "static/authorized"
 @app.get("{full_path:path}", include_in_schema=False)
 async def ServeHTML(full_path: str, session: str = Cookie(None)):
     """
     Serves static web files (HTML, CSS, etc.)
     """
-    try:
-        get_current_user(session)
-    except HTTPException:
-        return RedirectResponse("/?error=\"Please login!\"")
     if full_path == "/" or full_path == "":
         full_path = "index.html"
     elif ".css" in full_path or ".js" in full_path:
         full_path = "."+full_path
     else:
         full_path = "."+full_path+".html"
-    file = STATIC / full_path
-    if file.exists():
-        return FileResponse(file)
+    fileP = STATICP / full_path
+    fileA = STATICA / full_path
+    if fileP.exists():
+        return FileResponse(fileP)
+    if fileA.exists():
+        try:
+            get_current_user(session)
+        except HTTPException:
+            return RedirectResponse("/401")
+        return FileResponse(fileA)
     else:
-        return FileResponse(STATIC / "404.html")
+        return RedirectResponse("/404")

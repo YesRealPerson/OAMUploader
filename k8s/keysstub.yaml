@@ -6,6 +6,6 @@ type: Opaque
 data:
   OSM_CLIENT_ID: test
   OSM_CLIENT_SECRET: test
-  JWT_SECRET: test
+  JWT_SECRET: test # May eventually become depreciated in favor of different auth systems.
   AWS_ACCESS_KEY_ID: test
   AWS_SECRET_ACCESS_KEY: test

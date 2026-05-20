@@ -106,32 +106,63 @@
         outer.appendChild(delBtn);
         return outer
     }
-    const progressFactory = (title, status, message) => {
-        let outer = document.createElement("div")
-        outer.className = "entry processing"
+    
+    const deleteUpload = async (id) => {
+        if (!confirm("Remove this failed upload from the list?")) return;
 
-        let loader = document.createElement("div")
-        if (status == "Failed") {
-            outer.className = "entry failure"
-        } else {
-            loader.className = "loader"
+        try {
+            const response = await fetch("/api/v1/deleteupload?id=" + encodeURIComponent(id), {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" }
+            });
+
+            if (response.ok) {
+                refresh();
+            } else {
+                const err = await response.json().catch(() => ({}));
+                alert(err.detail || "Failed to delete upload.");
+            }
+        } catch (err) {
+            console.error("Error deleting upload:", err);
         }
-        outer.appendChild(loader)
+    };
 
-        let inner = document.createElement("div")
-        let name = document.createElement("h2")
-        name.innerText = "Processing: " + title
-        inner.appendChild(name)
+    const progressFactory = (title, status, message, id) => {
+        let outer = document.createElement("div");
+        outer.className = "entry processing";
 
-        let bits = document.createElement("div")
-        bits.innerText = `${status} - ${message}`
-        inner.appendChild(bits)
+        let loader = document.createElement("div");
+        if (status == "Failed" || status == "Error") {
+            outer.className = "entry failure";
+        } else {
+            loader.className = "loader";
+        }
+        outer.appendChild(loader);
 
-        outer.appendChild(inner)
-        return outer
-    }
+        let inner = document.createElement("div");
+
+        let name = document.createElement("h2");
+        name.innerText = "Processing: " + title;
+        inner.appendChild(name);
+
+        let bits = document.createElement("div");
+        bits.innerText = `${status} - ${message}`;
+        inner.appendChild(bits);
+
+        outer.appendChild(inner);
+
+        if (status == "Failed" || status == "Error") {
+            let delBtn = document.createElement("button");
+            delBtn.innerText = "Remove";
+            delBtn.className = "delete";
+            delBtn.onclick = () => deleteUpload(id);
+            outer.appendChild(delBtn);
+        }
+
+        return outer;
+    };
     const refresh = async () => {
-        let response = await(await fetch("/api/v1/getEntries")).json()
+        let response = await (await fetch("/api/v1/getEntries")).json()
         console.log(response)
         processing = response.processing
         registered = response.registered.features
@@ -146,7 +177,7 @@
             items.push(entryFactory(item.properties.title, instruments, item.properties['oam:producer_name'], item.properties['oam:platform_type'], item.assets.thumbnail.href, item.properties.description, item.properties.datetime, item.id))
         }
         log.innerHTML = "";
-        if(items.length == 0) log.innerText = "No entries...";
+        if (items.length == 0) log.innerText = "No entries...";
         for (let i = 0; i < items.length; i++) {
             log.appendChild(items[i])
         }

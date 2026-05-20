@@ -154,14 +154,56 @@
 
     <script type="module">
         // TODO: Allow multiple uploads at once, requires different forms per file!
-        import { Uppy, Dashboard, AwsS3, Form } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
+        // TODO: Resumable uploads, have to make service worker (:\)
+        import { Uppy, Dashboard, AwsS3, Form, GoldenRetriever } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
+
+        const metadataForm = document.getElementById('metadata');
+        const metadataStorageKey = 'oam-upload-metadata';
+
+        const restoreMetadataForm = () => {
+            const saved = JSON.parse(localStorage.getItem(metadataStorageKey) || '{}');
+
+            for (const [key, value] of Object.entries(saved)) {
+                const field = metadataForm.elements[key];
+                if (!field || value == null) continue;
+
+                if (field instanceof RadioNodeList) {
+                    const radio = [...field].find((el) => el.value === value);
+                    if (radio) radio.checked = true;
+                } else {
+                    field.value = value;
+                }
+            }
+        };
+
+        const saveMetadataForm = () => {
+            const data = new FormData(metadataForm);
+            const saved = {};
+
+            for (const [key, value] of data.entries()) {
+                saved[key] = value;
+            }
+
+            localStorage.setItem(metadataStorageKey, JSON.stringify(saved));
+        };
+
+        restoreMetadataForm();
+
+        metadataForm.addEventListener('input', saveMetadataForm);
+        metadataForm.addEventListener('change', saveMetadataForm);
+
 
         const uppy = new Uppy({
+            id: 'oam-uploader',
             autoProceed: false, // So uppy only uploads when the metadata is finalized, "By default, Uppy used to begin uploading right after you selected a file."
             restrictions: {
                 allowedFileTypes: ['.tif', '.tiff'],
                 maxNumberOfFiles: 1 // TODO: See above.
             },
+        });
+
+        uppy.use(GoldenRetriever, {
+            serviceWorker: true,
         });
 
         uppy.use(Dashboard, {
@@ -208,15 +250,21 @@
             return final
         }
 
+        const uploadStorageKey = (file) =>
+            `oam-upload:${file.id}`;
+
         uppy.use(AwsS3, {
             shouldUseMultipart: true,
-            limit: 1, // May change later, but for now I would imagine only 1
+            limit: 1,
             // TODO: Implement companion for Google Drive and DropBox upload, requires changes to publicServer as well...
-            // TODO: Send userid using headers tag
 
             async createMultipartUpload(file) {
+                const existing = localStorage.getItem(uploadStorageKey(file));
+                if (existing) {
+                    return JSON.parse(existing);
+                }
 
-                let metadata = validateMetadata(file.meta)
+                let metadata = validateMetadata(file.meta);
 
                 const res = await fetch('/api/v1/s3/createmultipart', {
                     method: 'POST',
@@ -224,11 +272,19 @@
                     body: JSON.stringify({
                         filename: file.name,
                         contenttype: file.type,
-                        metadata: metadata
+                        metadata
                     }),
                 });
+
                 if (!res.ok) throw new Error((await res.json())['detail']);
-                return await res.json();
+
+                const multipart = await res.json();
+                localStorage.setItem(uploadStorageKey(file), JSON.stringify({
+                    key: multipart.key,
+                    uploadId: multipart.uploadId,
+                }));
+
+                return multipart;
             },
 
             async signPart(file, { uploadId, key, partNumber, signal }) { // Creates signed URL to upload files to
@@ -264,13 +320,12 @@
                 const res = await fetch('/api/v1/s3/completemultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        'uploadid': uploadId,
-                        'key': key,
-                        'parts': parts
-                    }),
+                    body: JSON.stringify({ uploadid: uploadId, key, parts }),
                 });
+
                 if (!res.ok) throw new Error('Failed to complete multipart upload');
+
+                localStorage.removeItem(uploadStorageKey(file));
                 return await res.json();
             },
 
@@ -278,17 +333,22 @@
                 await fetch('/api/v1/s3/abortmultipart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        'uploadid': uploadId,
-                        'key': key
-                    }),
+                    body: JSON.stringify({ uploadid: uploadId, key }),
                 });
+
+                localStorage.removeItem(uploadStorageKey(file));
             },
         });
 
         uppy.on('complete', (result) => {
             console.log('Upload complete. Successful files:', result.successful);
             console.log('Failed files:', result.failed);
+
+            // Remove cached formdata if no failures
+            if (result.successful.length > 0 && result.failed.length === 0) {
+                localStorage.removeItem(metadataStorageKey);
+                metadataForm.reset();
+            }
         });
 
         uppy.on('upload-error', (file, error) => {

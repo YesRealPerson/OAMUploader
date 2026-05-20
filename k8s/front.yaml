@@ -71,6 +71,16 @@ spec:
             value: "true"
           - name: REDIRECT_URI
             value: http://127.0.0.1:12345/api/v1/authorize
+          - name: AUTHORIZE_URL
+            value: https://www.openstreetmap.org/oauth2/authorize
+          - name: TOKEN_URL
+            value: https://www.openstreetmap.org/oauth2/token
+          - name: WF_FRONT_URL
+            value: http://front-api.default.svc.cluster.local:12345
+          - name: WF_AWS_URL
+            value: http://172.22.48.1:4566
+          - name: WF_STAC_URL
+            value: http://stac-api.default.svc.cluster.local:8082
         envFrom:
         - secretRef:
           name: keys
