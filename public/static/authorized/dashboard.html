@@ -33,7 +33,7 @@
                 Cantarell,
                 'Open Sans',
                 'Helvetica Neue',
-                sans-serif;
+                sans-serif
         }
     </style>
 
@@ -46,28 +46,90 @@
 </head>
 <script src="./scripting.js" defer></script>
 <script defer>
+    let editingEntryId = null
+    const editEntry = async (id, edits) => {
+        try {
+            const response = await fetch("/api/v1/editEntry", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id, edits })
+            })
+
+            if (response.ok) {
+                editingEntryId = null
+                refresh()
+            } else {
+                const err = await response.json().catch(() => ({}))
+                alert(err.detail || "Failed to edit entry.")
+            }
+        } catch (err) {
+            console.error("Error editing entry:", err)
+            alert("Failed to edit entry.")
+        }
+    }
+
+    const makeInput = (labelText, name, value) => {
+        let label = document.createElement("label")
+        label.style.display = "block"
+        label.style.marginTop = "0.5rem"
+        label.innerText = labelText
+
+        let input = document.createElement("input")
+        input.name = name
+        input.value = value || ""
+        input.style.display = "block"
+        input.style.width = "100%"
+        input.style.boxSizing = "border-box"
+        label.appendChild(input)
+        return label
+    }
+
+    const makeSelect = (labelText, name, value, options) => {
+        let label = document.createElement("label")
+        label.style.display = "block"
+        label.style.marginTop = "0.5rem"
+        label.innerText = labelText
+
+        let select = document.createElement("select")
+        select.name = name
+        select.value = value || ""
+        select.style.display = "block"
+        select.style.width = "100%"
+        select.style.boxSizing = "border-box"
+
+        for (let optionValue of options) {
+            let option = document.createElement("option")
+            option.value = optionValue
+            option.innerText = optionValue
+            select.appendChild(option)
+        }
+        select.value = value || options[0]
+        label.appendChild(select)
+        return label
+    }
+
     const deleteEntry = async (id) => {
-        if (!confirm("Are you sure you want to delete this entry?")) return;
+        if (!confirm("Are you sure you want to delete this entry?")) return
 
         try {
             const response = await fetch("/api/v1/deleteentry?id=" + id, {
                 method: "DELETE",
                 headers: { "Content-Type": "application/json" }
-            });
+            })
 
             if (response.ok) {
                 // Trigger a UI refresh or remove the element immediately
-                console.log("Deleted successfully");
+                console.log("Deleted successfully")
                 refresh()
             } else {
-                alert("Failed to delete entry.");
+                alert("Failed to delete entry.")
             }
         } catch (err) {
-            console.error("Error deleting:", err);
+            console.error("Error deleting:", err)
         }
-    };
+    }
 
-    const entryFactory = (title, instruments, producer, platform, thumb, description, datetime, id) => {
+    const entryFactory = (title, instruments, producer, platform, thumb, description, datetime, id, license, contact) => {
         let outer = document.createElement("div")
         outer.className = "entry"
 
@@ -88,10 +150,10 @@
         head.appendChild(date)
         inner.appendChild(head)
 
-        inner.appendChild(head);
+        inner.appendChild(head)
 
         let bits = document.createElement("div")
-        bits.innerText = `${platform}, ${instruments}, ${producer}`
+        bits.innerHTML = `Platform: ${platform}<br/>Sensor: ${instruments}<br/>Provider: ${producer}`
         inner.appendChild(bits)
 
         let desc = document.createElement("div")
@@ -99,69 +161,129 @@
         inner.appendChild(desc)
 
         outer.appendChild(inner)
-        let delBtn = document.createElement("button");
-        delBtn.innerText = "Delete";
-        delBtn.className = "delete"; // Add this class to your CSS
-        delBtn.onclick = () => deleteEntry(id);
-        outer.appendChild(delBtn);
+
+        let editPanel = document.createElement("div")
+        editPanel.className = "edit-panel"
+        editPanel.style.display = "none"
+        editPanel.style.gridColumn = "1 / -1"
+        editPanel.style.marginTop = "1rem"
+        editPanel.style.padding = "1rem"
+        editPanel.style.border = "1px solid #ddd"
+        editPanel.style.borderRadius = "0.5rem"
+
+        let form = document.createElement("form")
+        form.appendChild(makeSelect("License", "license", license, ["CC-BY 4.0", "CC BY-NC 4.0", "CC BY-SA 4.0"]))
+        form.appendChild(makeInput("Sensor", "instruments", instruments))
+        form.appendChild(makeSelect("Platform", "oam:platform_type", platform, ["satellite", "aircraft", "uav", "balloon", "kite"]))
+        form.appendChild(makeInput("Provider", "oam:producer_name", producer))
+        form.appendChild(makeInput("Contact", "contact", contact))
+
+        let submitBtn = document.createElement("button")
+        submitBtn.type = "submit"
+        submitBtn.innerText = "Submit edits"
+        submitBtn.style.marginTop = "1rem"
+        form.appendChild(submitBtn)
+
+        form.onsubmit = async (event) => {
+            event.preventDefault()
+            const formData = new FormData(form)
+            const edits = {}
+            for (let [key, value] of formData.entries()) {
+                value = value.trim()
+                if (value !== "") edits[key] = value
+            }
+            await editEntry(id, edits)
+        }
+
+        editPanel.appendChild(form)
+        outer.appendChild(editPanel)
+
+        let controls = document.createElement("div")
+        controls.style.display = "flex"
+        controls.style.flexDirection = "column"
+        controls.style.gap = "0.5rem"
+        controls.style.position = "absolute"
+        controls.style.top = "15px"
+        controls.style.right = "15px"
+
+        let editBtn = document.createElement("button")
+        editBtn.innerText = "Edit"
+        controls.appendChild(editBtn)
+
+        editBtn.onclick = () => {
+            const open = editPanel.style.display === "none"
+            editPanel.style.display = open ? "block" : "none"
+            editBtn.innerText = open ? "Cancel edit" : "Edit"
+            editingEntryId = open ? id : null
+        }
+
+        let delBtn = document.createElement("button")
+        delBtn.innerText = "Delete"
+        delBtn.className = "delete"
+        delBtn.onclick = () => deleteEntry(id)
+        controls.appendChild(delBtn)
+        outer.appendChild(controls)
+
         return outer
     }
     
     const deleteUpload = async (id) => {
-        if (!confirm("Remove this failed upload from the list?")) return;
+        if (!confirm("Remove this failed upload from the list?")) return
+        console.log(id)
 
         try {
             const response = await fetch("/api/v1/deleteupload?id=" + encodeURIComponent(id), {
                 method: "DELETE",
                 headers: { "Content-Type": "application/json" }
-            });
+            })
 
             if (response.ok) {
-                refresh();
+                refresh()
             } else {
-                const err = await response.json().catch(() => ({}));
-                alert(err.detail || "Failed to delete upload.");
+                const err = await response.json().catch(() => ({}))
+                alert(err.detail || "Failed to delete upload.")
             }
         } catch (err) {
-            console.error("Error deleting upload:", err);
+            console.error("Error deleting upload:", err)
         }
-    };
+    }
 
     const progressFactory = (title, status, message, id) => {
-        let outer = document.createElement("div");
-        outer.className = "entry processing";
+        let outer = document.createElement("div")
+        outer.className = "entry processing"
 
-        let loader = document.createElement("div");
+        let loader = document.createElement("div")
         if (status == "Failed" || status == "Error") {
-            outer.className = "entry failure";
+            outer.className = "entry failure"
         } else {
-            loader.className = "loader";
+            loader.className = "loader"
         }
-        outer.appendChild(loader);
+        outer.appendChild(loader)
 
-        let inner = document.createElement("div");
+        let inner = document.createElement("div")
 
-        let name = document.createElement("h2");
-        name.innerText = "Processing: " + title;
-        inner.appendChild(name);
+        let name = document.createElement("h2")
+        name.innerText = "Processing: " + title
+        inner.appendChild(name)
 
-        let bits = document.createElement("div");
-        bits.innerText = `${status} - ${message}`;
-        inner.appendChild(bits);
+        let bits = document.createElement("div")
+        bits.innerText = `${status} - ${message}`
+        inner.appendChild(bits)
 
-        outer.appendChild(inner);
+        outer.appendChild(inner)
 
         if (status == "Failed" || status == "Error") {
-            let delBtn = document.createElement("button");
-            delBtn.innerText = "Remove";
-            delBtn.className = "delete";
-            delBtn.onclick = () => deleteUpload(id);
-            outer.appendChild(delBtn);
+            let delBtn = document.createElement("button")
+            delBtn.innerText = "Remove"
+            delBtn.className = "delete"
+            delBtn.onclick = () => deleteUpload(id)
+            outer.appendChild(delBtn)
         }
 
-        return outer;
-    };
+        return outer
+    }
     const refresh = async () => {
+        if (editingEntryId !== null) return
         let response = await (await fetch("/api/v1/getEntries")).json()
         console.log(response)
         processing = response.processing
@@ -169,15 +291,15 @@
         items = []
         for (let i = 0; i < processing.length; i++) {
             item = processing[i]
-            items.push(progressFactory(item.filename, item.status, item.message))
+            items.push(progressFactory(item.filename, item.status, item.message, item.id))
         }
         for (let i = 0; i < registered.length; i++) {
             item = registered[i]
             instruments = item.properties.instruments.join(", ")
-            items.push(entryFactory(item.properties.title, instruments, item.properties['oam:producer_name'], item.properties['oam:platform_type'], item.assets.thumbnail.href, item.properties.description, item.properties.datetime, item.id))
+            items.push(entryFactory(item.properties.title, instruments, item.properties['oam:producer_name'], item.properties['oam:platform_type'], item.assets.thumbnail.href, item.properties.description, item.properties.datetime, item.id, item.properties.license, item.properties.contact))
         }
-        log.innerHTML = "";
-        if (items.length == 0) log.innerText = "No entries...";
+        log.innerHTML = ""
+        if (items.length == 0) log.innerText = "No entries..."
         for (let i = 0; i < items.length; i++) {
             log.appendChild(items[i])
         }
@@ -187,7 +309,7 @@
         let log = document.getElementById("log")
         while (true) {
             refresh()
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            await new Promise(resolve => setTimeout(resolve, 10000))
         }
     }
     const main = async () => {
@@ -201,7 +323,7 @@
     }
     main()
 </script>
-<header style="display: flex; justify-content: space-between;">
+<header style="display: flex; justify-content: space-between">
     <div>
         <a href="/">Home</a>
         <a href="/dashboard">Dashboard</a>
@@ -215,7 +337,7 @@
 
 <body>
     <h1>Dashboard</h1>
-    <div style="height: 50vh; width: 100%;" id="log">
+    <div style="height: 50vh; width: 100%" id="log">
         Loading...
     </div>
 </body>

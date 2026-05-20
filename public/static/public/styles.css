@@ -95,12 +95,6 @@ body{
   animation: l1 1s infinite;
 }
 @keyframes l1 {to{transform: rotate(.5turn)}}
-
-.delete {
-    position: absolute;
-    top: 15px;
-    right: 15px;
-}
 header{
     margin: 15px
 }

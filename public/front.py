@@ -268,10 +268,9 @@ async def DeleteUpload(id: str, user=Depends(get_current_user)):
             status_code=400,
             detail="Only failed uploads can be deleted from the upload list"
         )
-    print(upload.status)
-    # validStates.discard(upload.state)
-    # usertoupload.get(user["sub"], set()).discard(id)
-    # del uploaddb[id]
+    validStates.discard(upload.state)
+    usertoupload.get(user["sub"], set()).discard(id)
+    del uploaddb[id]
 
     return {"ok": True}
 
