@@ -4,3 +4,4 @@ Scripts/*
 __pycache__
 Lib/*
 temporary/*
+include/*
