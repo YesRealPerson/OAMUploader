@@ -12,10 +12,6 @@ spec:
       labels:
         app: stac-api
     spec:
-      hostAliases:
-        - ip: "172.26.80.1"
-          hostnames:
-          - "database"
       containers:
       - name: stac
         image: oam-uploader-stac:latest
@@ -30,9 +26,9 @@ spec:
           - name: POSTGRES_DBNAME
             value: "postgis"
           - name: POSTGRES_HOST_READER
-            value: "database"
+            value: "host.minikube.internal"
           - name: POSTGRES_HOST_WRITER
-            value: "database"
+            value: "host.minikube.internal"
           - name: POSTGRES_PORT
             value: "5432"
 ---

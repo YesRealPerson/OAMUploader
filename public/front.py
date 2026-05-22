@@ -180,8 +180,6 @@ def slugify(text):
 
 """
 Internal interaction functions
-
-TODO: Add endpoint for user to kill processing
 """
 def invoke_processing(s3_path: str, filename:str, key:str, userid: str):
     """
@@ -236,8 +234,6 @@ async def callback(body: WorkflowStatusUpdate, request: Request):
     """
     Workflows attempts to call this endpoint to update the state of a given upload
     Requires that the workflow pass a valid state
-
-    TODO: If the workflow passes an invalid state kill the workflow
     """
     token = request.headers.get("X-Internal-Token")
     if(token not in validStates or body.id not in uploaddb.keys()):

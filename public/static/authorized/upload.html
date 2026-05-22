@@ -126,7 +126,7 @@
                 Name of company or individual that collected or provided the imagery.
             </div>
 
-            <!-- TODO: Default to user login email -->
+            <!-- TODO: Default to user login email, requires OSM Auth -->
             <label for="contact">Contact*</label>
             <input type="email" name="contact" placeholder="Your email" required />
 
@@ -153,8 +153,6 @@
     </div>
 
     <script type="module">
-        // TODO: Allow multiple uploads at once, requires different forms per file!
-        // TODO: Resumable uploads, have to make service worker (:\)
         import { Uppy, Dashboard, AwsS3, Form, GoldenRetriever } from "https://releases.transloadit.com/uppy/v5.2.1/uppy.min.mjs";
 
         const metadataForm = document.getElementById('metadata');
@@ -198,7 +196,7 @@
             autoProceed: false, // So uppy only uploads when the metadata is finalized, "By default, Uppy used to begin uploading right after you selected a file."
             restrictions: {
                 allowedFileTypes: ['.tif', '.tiff'],
-                maxNumberOfFiles: 1 // TODO: See above.
+                maxNumberOfFiles: 1
             },
         });
 
@@ -256,7 +254,7 @@
         uppy.use(AwsS3, {
             shouldUseMultipart: true,
             limit: 1,
-            // TODO: Implement companion for Google Drive and DropBox upload, requires changes to publicServer as well...
+            // TODO: Implement companion for Google Drive and DropBox upload, requires service worker and changes to publicServer as well...
 
             async createMultipartUpload(file) {
                 const existing = localStorage.getItem(uploadStorageKey(file));

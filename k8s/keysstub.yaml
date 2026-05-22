@@ -3,7 +3,7 @@ kind: Secret
 metadata:
   name: keys
 type: Opaque
-data:
+stringData:
   OSM_CLIENT_ID: test
   OSM_CLIENT_SECRET: test
   JWT_SECRET: test # May eventually become depreciated in favor of different auth systems.

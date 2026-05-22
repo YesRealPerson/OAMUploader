@@ -44,10 +44,6 @@ spec:
         app: front-api
     spec:
       serviceAccountName: front-api-sa
-      hostAliases:
-      - ip: "172.26.80.1"
-        hostnames:
-        - "aws"
       containers:
       - name: front
         image: oam-uploader-front:latest
@@ -58,9 +54,9 @@ spec:
           - name: STAC_URL
             value: "http://stac-api:8082"
           - name: AWS_ENDPOINT_URL
-            value: "http://aws:4566"
-          - name: AWS_ENDPOINT_URL_S3
-            value: "http://aws:4566"
+            value: "http://host.minikube.internal:4566"
+          - name: AWS_ENDPOINT_URL_S3 # Fairly confident this can be safely removed
+            value: "http://host.minikube.internal:4566"
           - name: EXTERNAL_S3_ENDPOINT
             value: "http://localhost:4566"
           - name: BUCKET_NAME
@@ -78,12 +74,12 @@ spec:
           - name: WF_FRONT_URL
             value: http://front-api.default.svc.cluster.local:12345
           - name: WF_AWS_URL
-            value: http://172.22.48.1:4566
+            value: http://host.minikube.internal:4566
           - name: WF_STAC_URL
             value: http://stac-api.default.svc.cluster.local:8082
         envFrom:
-        - secretRef:
-          name: keys
+          - secretRef:
+              name: keys
 ---
 apiVersion: v1
 kind: Service

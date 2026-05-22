@@ -9,6 +9,8 @@ Note that testing was done on a Windows machine and all commands below are under
 - Minikube (or similar)
 - Argo Workflows
 - Localstack (AWS)
+    - S3 object storage for tif files
+    - Make sure to bind to 0.0.0.0:4566 using enviornment variable GATEWAY_LISTEN
 - Local <a href="https://docs.imagery.hotosm.org/dev/local-setup/">OpenAerialMap</a>
 - Python 3.14
 
@@ -40,6 +42,33 @@ All files relating to the public API and uploader page.
 - `stac.py` - FastAPI server for communicating with the pgStac database in OpenAerialMap
 - `static` - Static web files
 
+# Environment Variables
+Every environment variable and what it does.
+
+Files required for section:
+`front.yaml`, `stac.yaml`, `keys.yaml` (You will have to create this file, see the stub file for a template)
+### `front.yaml`
+- `STAC_URL` - Url for communication between front facing server and stac server, this likely does not need to change.
+- `AWS_ENDPOINT_URL` - AWS endpoint url (i.e. its passed directly as the endpoint-url parameter to all aws cli commands)
+- `EXTERNAL_S3_ENDPOINT` - AWS endpoint passed to front-end access
+    - This is mainly used for local development as the endpoint in and out of cluster will be different.
+- `BUCKET_NAME` - AWS S3 Bucket name
+- `AWS_REGION` - AWS region
+- `PRODUCTION` - Tells front end server to try to create test buckets, enviornment variables, etc if false
+- `WF_FRONT_URL` - URL passed to Argo Workflows for pinging the front end server, this likely does not need to change.
+- `WF_AWS_URL` - AWS URL passed to Argo Workflows for uploading to S3.
+- `WF_STAC_URL` - URL passed to Argo Workflows for communicating with pgSTAC, this likely does not need to change.
+
+The unlisted variables relate to OAuth endpoints for OpenStreetMap which may soon become depreciated.
+
+### `stac.yaml`
+All environment variables relate to authentication and endpoints for the pgSTAC database.
+
+### `keys.yaml`
+Sensitive keys for OSM OAuth, and AWS, also `JWT_SECRET` for token generation and such.
+
+In development all keys should be in a `.env` file within the public folder.
+
 # Pipeline setup
 
 
@@ -66,7 +95,13 @@ argo template delete --all -n argo
 argo template create ./k8s/pipeline.yaml -n argo
 ```
 
+You may want to port forward argo to debug specific workflows.
+```
+kubectl -n argo port-forward deployment/argo-server 2746:2746
+```
+
 Note: Processing large files will require a lot of disk space, adjust your Minikube configuration appropriately. We found that our 5gb test file took up close to ~45gb oftotal storage space at once to process.
+Example: `minikube start --cpus 6 --memory 12288 --disk-size 160g`
 
 # Frontend Startup
 
@@ -92,15 +127,15 @@ minikube -p minikube docker-env --shell powershell | Invoke-Expression
 
 2. Build production containers (cd into the public directory)
 ```
-docker build -t oam-uploader-front:latest -f .\public\front.Dockerfile .
-docker build -t oam-uploader-stac:latest -f .\public\stac.Dockerfile .
+docker build -t oam-uploader-front:latest -f .\public\front.Dockerfile . --no-cache
+docker build -t oam-uploader-stac:latest -f .\public\stac.Dockerfile . --no-cache
 ```
 
 3. Apply kubernetes manifests
 ```
-kubectl apply -f .\k8s\front.yaml
-kubectl apply -f .\k8s\stac.yaml
 kubectl apply -f .\k8s\keys.yaml 
+kubectl apply -f .\k8s\stac.yaml
+kubectl apply -f .\k8s\front.yaml
 ```
 
 Port forward front facing server
