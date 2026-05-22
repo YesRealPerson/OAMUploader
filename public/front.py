@@ -14,8 +14,8 @@ import os
 from typing import Dict, List
 from jose import ExpiredSignatureError, JWTError, jwt
 from kubernetes import client, config
-# from hotosm_auth import AuthConfig
-# from hotosm_auth_fastapi import init_auth, osm_router, CurrentUser
+from hotosm_auth import AuthConfig
+from hotosm_auth_fastapi import init_auth, osm_router, CurrentUser
 import uuid
 import re
 
@@ -85,10 +85,9 @@ FastAPI Setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # TODO: Setup HOTOSM auth
-    # auth_config = AuthConfig.from_env()
-    # init_auth(auth_config)
+    auth_config = AuthConfig.from_env()
+    init_auth(auth_config)
     yield
-# app.include_router(osm_router, prefix="/api/auth/osm")
 
 app = FastAPI(
     title="OAM Uploader API Reference",
@@ -99,6 +98,12 @@ app = FastAPI(
 lifespan=lifespan
 )
 
+app.include_router(osm_router, prefix="/api/v1")
+
+"""TESTING ENDPOINTS"""
+@app.get("/me")
+async def me(user: CurrentUser):
+    return {"id": user.id, "email": user.email}
 
 """
 Voltile data structures for storing server states
